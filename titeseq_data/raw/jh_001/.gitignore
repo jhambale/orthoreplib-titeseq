@@ -1,0 +1,12 @@
+*
+!.gitignore
+!.gitkeep
+!cell_ct_out/
+!cell_ct_raw/
+!demultiplex/
+!demux_in/
+!fluor_raw/
+!raw_fastq/
+!references/
+!demultiplex/jh_001_metadata.txt
+!demux_in/jh_001_bc_sample_trace.txt

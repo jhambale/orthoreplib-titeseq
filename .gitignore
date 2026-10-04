@@ -1,0 +1,40 @@
+# Experimental data and analysis output data are not tracked.
+# Keep only the empty raw/outputs directory scaffolds described in README.md.
+/ec50_viewer_distribution/
+/titeseq_data/*
+!/titeseq_data/raw/
+!/titeseq_data/outputs/
+/titeseq_analysis/distro_27may/
+/titeseq_analysis/distro_27may.zip
+/titeseq_analysis/src/16_lowmut_library_constr.py
+/titeseq_analysis/src/19_force_directed_layout.ipynb
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Generated viewer output
+/ec50_viewer_distribution/test_output.html
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.exe
+
+# Logs, local configuration, and operating-system/editor files
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+*~
+*.swp

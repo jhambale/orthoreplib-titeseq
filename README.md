@@ -1,7 +1,7 @@
 TITESEQ STACK FOR DRIFTED LIBRARIES
 
 Author: Jacob Hambalek
-README Version 1.0. Date 3 OCT 2026
+README Version 1.1. Date 9 OCT 2026
 
 Acknowledgements: Scripts were structured with guidance from Miguel Alcantar, PhD and Yutong Yu, PhD.
 
@@ -75,7 +75,11 @@ Before proceeding, ensure that the appropriate reference FASTA files are present
 
 Once the metadata file is generated using 01a_metadatafill.py, the desired FASTA files are in the reference directory, and the appropriately named FASTQ files are in the demultiplex directory, you may run script 04_filter_ngmerge_reads.sh. This bash script will analyze, filter the reads by quality score, and merge the paired-end reads. The merged reads will then be compared to the reference fasta sequences to identify mutations. This output (.bam) will be stored in the "alignments/" directory.
 
+(updated 09 OCT 2026) The script 04_filter_ngmerge_reads.sh has been updated to pool reads from within a single concentration to create rank abundance files. These rank abundance files are then unpacked to determine the "knee" of both the raw abundance vs rank and the cumulative sequencing coverage using script 04b_pooled_seqthresh.py. The output of this script is a list of DNA sequences which are observed above this knee threshold and present in all concentrations for both replicates. See the script documentation at the top of the script to learn more about the different cutoff options available for filtering.
+
 Once the .bam files have been generated, the next script to run is 05_mutation_analysis.py. This script will analyze the .bam data to identify variants and how frequently they appear, storing the variants in each bin as a mutation dataframe (1 mutation csv per bin). The mutation dataframe will be saved in the "mutation_dfs/" directory. The filtering for the .bam can be adjusted (i.e. read threshold, percentile of total reads) using the modified script 05b_mutation_analysis_diag.py. This modified script outputs both the desired filtered .csv and a report (.png of graphs) describing where different filtering cutoffs would exist based on read count distribution. See the description at the top of the script for more information.
+
+(updated 09 OCT 2026). A variant of 05_mutation_analysis.py, named "05c_mutation_analysis_pooledwhitelist.py" uses the generated list of sequences from script 04b to reference against when unpacking the .bam files for each bin. The mutation_dfs generated (deposited in the mutation_dfs_whitelist directory) only contain sequences that are contained within the sequence whitelist.
 
 This next section describes how to build a library from a drift experiment (i.e. the composition of library sequences is unknown). The approach adopted here defines the library as the set of sequences seen at every concentration for each replicate. There are two scripts (used sequentially) that search for these sequences.
 
@@ -85,15 +89,17 @@ Script 07_create_raw_tite_seq_counts.py will take the .csv files from the "libra
 
 Once the raw counts for the library replicates have been generated, normalizing the counts and establishing fluorescence scores is the next step. The replicate csv files output from script 07 are used as the inputts for script 08_create_normalized_tite_seq_counts.py. This script will normalize the counts for each variant by cell fraction and total read count, known as the "normalized relative abundance" of each variant at each concentration (see the following reference for more information on the scoring approach: Angenent-Mari, N.M., Garruss, A.S., Soenksen, L.R. et al. A deep learning approach to programmable RNA switches. Nat Commun 11, 5057 (2020). https://doi.org/10.1038/s41467-020-18677-1). The cell fraction is drawn from the number of cells sorted input in the metadata text file.
 
+(updated 09 OCT 2026). A variant of script 07, named "07b_create_raw_tite_seq_counts_whitelist.py", builds the same raw counts list based on the read counts from mutation_dfs, aggregating DNA sequences that encode for the same amino acid sequence. Sequences in the whitelist that are not fully populated (i.e. at each concentration) from the mutation_dfs are subsequently removed in normalization within script 08_create_normalized_tite_seq_counts.py.
+
 The normalized relative abundance values are then multiplied by the geometric mean of the fluorescence values for each bin to generate a normalized TITE-Seq score for each variant at each concentration. This is enacting by running script 09_create_normalized_tite_seq_scores.py. The output of this script is one .csv file per replicate that contains the normalized TITE-Seq scores of each variant across all concentrations. These files will be saved in the "normalized_tite_seq_scores/" directory.
 
-It is from these fluorescent score csv files that the Kd values are calculated. The script 10_compute_Kds.py will take the normalized TITE-Seq scores and fit a curve to the data to calculate the Kd value for each variant. There is a series of checks undertaken (amplitude change, confidence in the fit) to determine the quality of the function fit. Variants are either assigned a PASS if all criteria are met or FAIL if any one of the criteria are not met.
+It is from these fluorescent score csv files that the Kd values are calculated. The script 10_compute_Kds.py will take the normalized TITE-Seq scores, present in full for both replicates, and fit a curve to the data to calculate the Kd value for each variant. There is a series of checks undertaken (amplitude change, confidence in the fit) to determine the quality of the function fit. Variants are either assigned a PASS if all criteria are met or FAIL if any one of the criteria are not met.
 The outputs of this script (all existing within the "tite_seq_Kds/" sub folder) are as follows:
 - A .csv file containing the Kd values for all variants across each replicate.
 - A .csv file containing the Kd values for only the passed EC50 variants across each replicate.
 - A .csv file containing the Kd values for only variants which failed due to low amplitude gain.
 - EC50 correlation plots (as .png files) comparing the EC50 for each replicate after each successive step of filtering (i.e. all variants, remove low amplitude, remove poor fit, remove EC50 values outside the tested concentration range).
-- A subfolder containing the curve fits for each variant (as .png files) for each variant separated into 'passed' and 'failed' groups.
+- A subfolder containing the curve fits for each variant (as .png files), including a marker for the EC50 value on the curve, for each variant separated into 'passed' and 'failed' groups.
 
 This product is the key output of the pipeline, and any subsequent scripts are just additionall analysis on the Kd values. A brief description of each script is as follows:
 - 11_unique_muts.py: identifying point mutations and their frequencies above a user set cutoff

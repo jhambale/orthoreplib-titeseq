@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 """
 Created on January 22 11:30:29 2025
@@ -99,6 +98,7 @@ def fit_variant_worker(task_args) -> Dict:
 
     all_scores = []
     all_fits = []
+    ec50_points = []
     rep_fail_reasons = []
 
     # Thresholds
@@ -159,6 +159,7 @@ def fit_variant_worker(task_args) -> Dict:
                 }
             )
             all_fits.append(np.full_like(conc_fits, np.nan))
+            ec50_points.append((np.nan, np.nan))
         else:
             kd, as_val, b_val = popt
             kd_std = float(np.sqrt(pcov[0, 0])) if np.isfinite(pcov[0, 0]) else np.nan
@@ -171,6 +172,7 @@ def fit_variant_worker(task_args) -> Dict:
                 }
             )
             all_fits.append(func_E50(conc_fits, *popt))
+            ec50_points.append((kd, float(func_E50(np.array([kd]), *popt)[0])))
 
             # R² and adjusted R² computed on the same data points used for fitting
             _concs_used = concs_for_fit[finite_mask]
@@ -277,6 +279,7 @@ def fit_variant_worker(task_args) -> Dict:
             raw_scores=all_scores,
             fit_concs=conc_fits,
             fit_scores=all_fits,
+            ec50_points=ec50_points,
             title=v_id,
             path=target_dir / f"{safe_id}.png",
             y_min=y_limits[0],
@@ -296,6 +299,7 @@ def plot_variant(
     raw_scores,
     fit_concs,
     fit_scores,
+    ec50_points,
     title,
     path,
     y_min,
@@ -333,6 +337,19 @@ def plot_variant(
                 linewidth=3,
                 color=color,
                 zorder=2,
+            )
+        ec50_conc, ec50_score = ec50_points[i]
+        if np.isfinite(ec50_conc) and np.isfinite(ec50_score):
+            ax.plot(
+                ec50_conc,
+                ec50_score,
+                linestyle="none",
+                marker="D",
+                markersize=8,
+                markeredgecolor="black",
+                color=color,
+                label=f"{label} EC50",
+                zorder=4,
             )
 
     ax.set_xscale("log")
@@ -736,8 +753,32 @@ def main():
 
     rep_ids = sorted(replicate_dfs.keys())
     print(f"Found replicates: {', '.join(rep_ids)}")
+    if len(rep_ids) < 2:
+        raise ValueError(
+            "At least two replicate input files are required to fit shared sequences."
+        )
 
-    # 3. Merge dataframes to align variants across replicates
+    # Fit only variants present in every replicate input.
+    sequence_sets = [
+        set(df["aa_sequence"].dropna().astype(str)) for df in replicate_dfs.values()
+    ]
+    shared_sequences = set.intersection(*sequence_sets)
+    if not shared_sequences:
+        raise ValueError("No amino-acid sequences are shared across replicate files.")
+    print(
+        f"Sequences present in every replicate: {len(shared_sequences)} "
+        f"(of {len(set.union(*sequence_sets))} unique sequences)"
+    )
+    for rep in rep_ids:
+        df = replicate_dfs[rep]
+        before = len(df)
+        replicate_dfs[rep] = df[df["aa_sequence"].astype(str).isin(shared_sequences)].copy()
+        print(
+            f"  {rep}: excluded {before - len(replicate_dfs[rep])} rows not shared "
+            "across replicates"
+        )
+
+    # 3. Merge the shared variants across replicates.
     metadata_cols = ["aa_sequence", "aa_mutations"]
     merged_df = None
     for rep in rep_ids:

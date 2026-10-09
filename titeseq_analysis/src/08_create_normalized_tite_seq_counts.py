@@ -144,6 +144,40 @@ def main():
         raw_path = matches[0]
         raw_df = pd.read_csv(raw_path)
 
+        raw_count_cols = [
+            column for column in raw_df.columns if column.endswith("_raw_counts")
+        ]
+        if not raw_count_cols:
+            raise ValueError(f"No raw-count columns found in {raw_path}")
+
+        no_read_any_conc = pd.Series(False, index=raw_df.index)
+        no_read_all_bins = raw_df[raw_count_cols].sum(axis=1).eq(0)
+        for conc, gate_counts in cell_counts.items():
+            conc_pattern = rf"^{re.escape(conc)}(?:[nN]?M)?_bin.*_raw_counts$"
+            conc_cols = raw_df.filter(regex=conc_pattern, axis=1).columns.tolist()
+            if len(conc_cols) != len(gate_counts):
+                raise ValueError(
+                    f"Expected {len(gate_counts)} raw-count bins for {conc} in "
+                    f"{raw_path}, found {len(conc_cols)}."
+                )
+            no_read_conc = raw_df[conc_cols].sum(axis=1).eq(0)
+            no_read_any_conc |= no_read_conc
+            print(
+                f"  {conc}: {int(no_read_conc.sum())} sequences have zero reads "
+                "across its bins"
+            )
+
+        removed_sequences = int(no_read_any_conc.sum())
+        zero_all_bins = int(no_read_all_bins.sum())
+        zero_some_conc_only = int((no_read_any_conc & ~no_read_all_bins).sum())
+        raw_df = raw_df.loc[~no_read_any_conc].copy()
+        print(
+            f"Removed {removed_sequences} sequences from {raw_path.name}: "
+            f"{zero_all_bins} had zero reads across all bins; "
+            f"{zero_some_conc_only} had reads overall but zero reads at one or more "
+            "concentrations."
+        )
+
         # Get normalized columns as a dictionary
         normed_cols_dict = normalize_replicate(raw_df, cell_counts)
 

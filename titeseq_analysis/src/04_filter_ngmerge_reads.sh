@@ -125,7 +125,7 @@ do
 	# define prefix for all output directories
 	output_dir_prefix="$DATA_ROOT/outputs/$experiment_name"
 	echo $output_dir_prefix
-	
+
 	# define log file path for capturing all console output
 	log_file="$output_dir_prefix/04_filter_ngmerge_reads_console_output.txt"
 	if [ ! -e ${pear_out_path}_out_merged.assembled.fastq ]
@@ -183,7 +183,7 @@ do
 					echo Making directory $output_dir_prefix/seqkit_stats/
 			    mkdir $output_dir_prefix/seqkit_stats/
 				fi
-				
+
 				# Initialize log file with timestamp and module versions
 				{
 					echo "=========================================="
@@ -288,7 +288,7 @@ do
           -n 30 \
           -f ${pear_out_path}_out_ngmerged.unassembled.fastq \
           -v > ${pear_out_path}_out_ngmerge_stats.txt 2>&1
-       
+
       echo "NGmerge completed. Log excerpt:" | tee -a "$log_file"
       cat ${pear_out_path}_out_ngmerge_stats.txt | tee -a "$log_file"
 
@@ -303,8 +303,14 @@ do
 	echo "Processing Seqkit for $fname" | tee -a "$log_file"
 	cat ${pear_out_path}_out_ngmerged.assembled.fastq | seqkit stats > ${seqkit_stats_out_path}_filtering_stats.txt 2>&1
 	cat ${seqkit_stats_out_path}_filtering_stats.txt | tee -a "$log_file"
-	cat ${pear_out_path}_out_ngmerged.assembled.fastq | seqkit amplicon -m 0 -P -s -F $flank_f -R $flank_r -r 21:-21 --bed > ${seqkit_filtered_read_variants_out_path}_variants.txt 2>&1
+	cat ${pear_out_path}_out_ngmerged.assembled.fastq | \
+	    seqkit amplicon -m 0 -P -s -F $flank_f -R $flank_r -r 21:-21 --bed \
+		> ${seqkit_filtered_read_variants_out_path}_variants.txt 2>&1
 	echo "Seqkit filtering completed" | tee -a "$log_file"
+	if ! gzip -f -- "${seqkit_filtered_read_variants_out_path}_variants.txt"; then
+		echo "ERROR: Failed to gzip ${seqkit_filtered_read_variants_out_path}_variants.txt" | tee -a "$log_file"
+		exit 1
+	fi
 	# rm ${pear_out_path}_out_merged.assembled.fastq
 	# bowtie2 \
 	#       --sensitive-local \
@@ -314,7 +320,7 @@ do
 	#       -p 7 | samtools view -bS - > ${alignment_out_path}.bam
 
     echo "Processing Minimap2 and Samtools for $fname" | tee -a "$log_file"
-    
+
     minimap2 \
     -ax sr \
     -t 7 \
@@ -323,7 +329,9 @@ do
     -k 11 \
     $reference_path.fasta \
     ${pear_out_path}_out_ngmerged.assembled.fastq 2>> "$log_file" | samtools view -bS - 2>> "$log_file" > ${alignment_out_path}.bam
-    
+
+    gzip ${pear_out_path}_out_ngmerged.assembled.fastq
+
     if [ ! -f "${alignment_out_path}.bam" ] || [ ! -s "${alignment_out_path}.bam" ]; then
         echo "ERROR: BAM file creation failed or is empty" | tee -a "$log_file"
         exit 1
@@ -335,16 +343,16 @@ do
         echo "ERROR: Sorted BAM file creation failed" | tee -a "$log_file"
         exit 1
     fi
-    
+
     samtools index ${unmapped_out_path}.sorted.bam 2>> "$log_file"
     echo "Samtools sort and index completed successfully" | tee -a "$log_file"
-    
+
     samtools stats ${unmapped_out_path}.sorted.bam > ${unmapped_out_path}_sortedstats.txt 2>> "$log_file"
     echo "Samtools stats saved" | tee -a "$log_file"
 
     samtools view -b -f 4 ${unmapped_out_path}.sorted.bam > ${unmapped_out_path}_unmapped.bam 2>> "$log_file"
     samtools fastq ${unmapped_out_path}_unmapped.bam > ${unmapped_out_path}_unmapped.fastq 2>> "$log_file"
-    
+
     if [ ! -f "${unmapped_out_path}_unmapped.fastq" ] || [ ! -s "${unmapped_out_path}_unmapped.fastq" ]; then
         echo "WARNING: Unmapped FASTQ file is empty or missing" | tee -a "$log_file"
     else
@@ -357,6 +365,127 @@ do
 			echo _____________new sample____________________________ | tee -a "$log_file"
 
 done
+
+# ============================================================
+# POST-LOOP: Pool NGmerge outputs and generate rank-abundance
+# ============================================================
+echo "" | tee -a "$log_file"
+echo "========== POOLING AND RANK ABUNDANCE ANALYSIS ==========" | tee -a "$log_file"
+
+pooled_dir="$DATA_ROOT/outputs/$experiment_name/pooled_reads"
+mkdir -p "$pooled_dir"
+
+declare -A selected_sample_prefixes=()
+for input_fastq in "$@"; do
+    input_basename=$(basename -- "$input_fastq")
+    input_prefix=${input_basename%_R[12]_001.fastq*}
+    selected_sample_prefixes["$input_prefix"]=1
+done
+
+declare -a pool_keys=()
+declare -A pool_labels=()
+declare -A pool_concentrations=()
+declare -A pool_flanks_f=()
+declare -A pool_flanks_r=()
+declare -A pool_fastqs=()
+
+while IFS=$'\t' read -r sample_number metadata_experiment sample_id binder_name concentration bin replicate cell_count mean_fluorescence barcode_f barcode_r metadata_flank_f metadata_flank_r reference reference_size; do
+    [[ "$sample_number" == "sample_number" ]] && continue
+    [[ "$metadata_experiment" == "$experiment_name" ]] || continue
+
+    sample_prefix=${sample_id%_R[12]_001.fastq*}
+    [[ -n "${selected_sample_prefixes[$sample_prefix]+selected}" ]] || continue
+
+    group_label=${binder_name%%_*}
+    pool_key="${replicate}|${concentration}"
+    assembled_fastq="$DATA_ROOT/outputs/$experiment_name/merged_reads/${sample_prefix}_out_ngmerged.assembled.fastq.gz"
+
+    if [[ ! -s "$assembled_fastq" ]]; then
+        echo "ERROR: Missing NGmerge FASTQ for metadata sample $sample_id: $assembled_fastq" | tee -a "$log_file"
+        exit 1
+    fi
+
+    if [[ -z "${pool_fastqs[$pool_key]+present}" ]]; then
+        pool_keys+=("$pool_key")
+        pool_labels["$pool_key"]=$group_label
+        pool_concentrations["$pool_key"]=$concentration
+        pool_flanks_f["$pool_key"]=$metadata_flank_f
+        pool_flanks_r["$pool_key"]=$metadata_flank_r
+    elif [[ "${pool_labels[$pool_key]}" != "$group_label" ||
+            "${pool_flanks_f[$pool_key]}" != "$metadata_flank_f" ||
+            "${pool_flanks_r[$pool_key]}" != "$metadata_flank_r" ]]; then
+        echo "ERROR: Inconsistent group label or flanks for replicate $replicate at ${concentration}nM" | tee -a "$log_file"
+        exit 1
+    fi
+
+    pool_fastqs["$pool_key"]+="$assembled_fastq"$'\n'
+done < "$METADATA"
+
+if [[ ${#pool_keys[@]} -eq 0 ]]; then
+    echo "ERROR: No metadata samples matched the supplied FASTQ files and experiment $experiment_name" | tee -a "$log_file"
+    exit 1
+fi
+
+for pool_key in "${pool_keys[@]}"; do
+    group_label=${pool_labels[$pool_key]}
+    concentration=${pool_concentrations[$pool_key]}
+    pool_name="${group_label}_${concentration}nM"
+    pooled_fastq="$pooled_dir/${pool_name}_pooled.fastq"
+    pooled_bed="$pooled_dir/${pool_name}_pooled_variants.bed"
+    rank_abundance_raw="$pooled_dir/rank_abundance_${pool_name}.txt"
+    rank_abundance_final="$pooled_dir/rank_abundance_${pool_name}_sums.txt"
+
+    echo "Pooling replicate $group_label at ${concentration}nM..." | tee -a "$log_file"
+    : > "$pooled_fastq"
+    while IFS= read -r assembled_fastq; do
+        [[ -n "$assembled_fastq" ]] || continue
+        if ! gzip -cd -- "$assembled_fastq" >> "$pooled_fastq"; then
+            echo "ERROR: Failed to decompress NGmerge FASTQ: $assembled_fastq" | tee -a "$log_file"
+            exit 1
+        fi
+    done <<< "${pool_fastqs[$pool_key]}"
+    echo "Pooled FASTQ lines: $(wc -l < "$pooled_fastq")" | tee -a "$log_file"
+
+    echo "Running seqkit amplicon for $pool_name..." | tee -a "$log_file"
+    if ! seqkit amplicon -m 0 -P -s \
+        -F "${pool_flanks_f[$pool_key]}" -R "${pool_flanks_r[$pool_key]}" -r 21:-21 --bed \
+        "$pooled_fastq" > "$pooled_bed" 2>&1; then
+        echo "ERROR: Seqkit amplicon failed for $pool_name; see $pooled_bed" | tee -a "$log_file"
+        exit 1
+    fi
+    echo "Pooled BED records: $(wc -l < "$pooled_bed")" | tee -a "$log_file"
+
+    echo "Building rank-abundance table for $pool_name..." | tee -a "$log_file"
+    awk '{print $7}' "$pooled_bed" \
+        | sort \
+        | uniq -c \
+        | sort -rn \
+        | awk 'BEGIN{OFS="\t"; print "rank\tcount\tsequence"} \
+               {print NR, $1, $2}' \
+        > "$rank_abundance_raw"
+
+    total_reads=$(awk 'NR>1 {sum+=$2} END {print sum}' "$rank_abundance_raw")
+    total_unique=$(awk 'NR>1' "$rank_abundance_raw" | wc -l)
+    echo "$pool_name variant reads (post-flank filter): $total_reads" | tee -a "$log_file"
+    echo "$pool_name unique sequences: $total_unique" | tee -a "$log_file"
+
+    awk -v total="$total_reads" \
+        'BEGIN{OFS="\t"; cumsum=0}
+         NR==1 {print $0, "frac_abundance", "cumulative_frac"; next}
+         {
+           frac = $2 / total;
+           cumsum += frac;
+           print $0, frac, cumsum
+         }' "$rank_abundance_raw" > "$rank_abundance_final"
+
+    echo "Rank-abundance table written to: $rank_abundance_final" | tee -a "$log_file"
+    if ! gzip -f -- "$pooled_fastq" "$pooled_bed"; then
+        echo "ERROR: Failed to gzip pooled files for $pool_name" | tee -a "$log_file"
+        exit 1
+    fi
+done
+
+echo "========== POOLING COMPLETE ==========" | tee -a "$log_file"
 
 # Final log entry
 {

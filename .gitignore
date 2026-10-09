@@ -8,6 +8,11 @@
 /titeseq_analysis/distro_27may.zip
 /titeseq_analysis/src/16_lowmut_library_constr.py
 /titeseq_analysis/src/19_force_directed_layout.ipynb
+/04_filterngmerge_reads_readable.txt
+/55b2_3.2nM_out_ngmerged_example.txt
+/55b2_3.2nM_out_ngmerged_example_trunc.txt
+/55b1_3.2nM_variants_example.txt
+/55b1_3.2nM_variants_example_trunc.txt
 
 # Python
 __pycache__/

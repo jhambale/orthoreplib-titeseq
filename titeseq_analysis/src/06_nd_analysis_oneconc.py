@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 """
 Created on January 29 08:24:51 2025
@@ -171,9 +170,31 @@ def main():
                     metadata_replicate["bin"] == binny
                 ].copy()
                 sample_name = metadata_slice["binder_name"].tolist()[0]
-                # CSV filenames drop underscores from the binder name
-                # (e.g. "55_b0_3.2nM" -> "55b0_3.2nM"), so normalise before matching
-                sample_name_norm = sample_name.replace("_", "", 1)
+                # CSV filenames may drop the underscore in binder_name and may
+                # add threshold, whitelist, or diagnostic suffixes.
+                sample_name_norm = re.sub(r"^(\d+)_b", r"\1b", sample_name)
+
+                def normalize_csv_stem(path):
+                    stem = path.rsplit("/", 1)[-1]
+                    stem = re.sub(r"\.csv$", "", stem, flags=re.IGNORECASE)
+                    stem = re.sub(
+                        r"(?:_whitelist)?_mutation_analysis$",
+                        "",
+                        stem,
+                        flags=re.IGNORECASE,
+                    )
+                    stem = re.sub(
+                        r"(_diagnostic.*|_?thresh\d+.*|_?cpm[\d.]+.*)$",
+                        "",
+                        stem,
+                        flags=re.IGNORECASE,
+                    )
+                    return re.sub(r"[^0-9a-zA-Z\.]+", "", stem).lower()
+
+                expected_names = {
+                    re.sub(r"[^0-9a-zA-Z\.]+", "", name).lower()
+                    for name in (sample_name, sample_name_norm)
+                }
                 # print(
                 #     f"  [DEBUG] rep={rep} bin={binny} | sample_name='{sample_name}' | sample_name_norm='{sample_name_norm}'"
                 # )
@@ -184,8 +205,14 @@ def main():
                     path2
                     for path2 in bin_seq_paths
                     if isinstance(path2, str)
-                    and (sample_name in path2 or sample_name_norm in path2)
+                    and normalize_csv_stem(path2) in expected_names
                 ]
+                if len(rep_bin_samp) != 1:
+                    raise ValueError(
+                        f"Expected one mutation CSV for {sample_name} "
+                        f"(replicate {rep}, bin {binny}), found {len(rep_bin_samp)}: "
+                        f"{rep_bin_samp}"
+                    )
                 # print(f"  [DEBUG] matched paths: {rep_bin_samp}")
                 rep_bin_list.append(rep_bin_samp[0])
             replicate_declare_dict[rep] = rep_bin_list
@@ -210,7 +237,25 @@ def main():
         bin_list = replicate_declare_dict[replicate]
         # print(bin_list)
         for scorenum, sample in enumerate(bin_list):
-            bin_df = pd.read_csv(sample, index_col=0)
+            bin_df = pd.read_csv(sample)
+            bin_df = bin_df.loc[
+                :, ~bin_df.columns.astype(str).str.match(r"^Unnamed:")
+            ]
+            required_mutation_columns = {
+                "dna_sequence",
+                "aa_sequence",
+                "read_count",
+                "dna_mutations",
+                "aa_mutations",
+                "number_dna_mutations",
+                "number_aa_mutations",
+            }
+            missing_columns = required_mutation_columns.difference(bin_df.columns)
+            if missing_columns:
+                raise ValueError(
+                    f"Mutation CSV {sample} is missing required column(s): "
+                    + ", ".join(sorted(missing_columns))
+                )
             bin_df_agg = aggregate_by_aa_sequence(bin_df)
             counts_dict = dict(zip(bin_df_agg["aa_sequence"], bin_df_agg["read_count"]))
             # strip the thresh/S suffix produced by script 02c to recover the bare
@@ -219,7 +264,12 @@ def main():
             import re as _re
 
             # normalize the filename by stripping the trailing `_mutation_analysis.csv`
-            raw_base = _re.sub(r"_mutation_analysis\.csv$", "", raw_fname)
+            raw_base = _re.sub(
+                r"(?:_whitelist)?_mutation_analysis\.csv$",
+                "",
+                raw_fname,
+                flags=_re.IGNORECASE,
+            )
             # remove diagnostic infixes or thresh/cpm-style suffixes (flexible single-regex)
             sample_name = _re.sub(r"(_diagnostic.*|_?thresh\d+.*|_?cpm[\d.]+.*)$", "", raw_base)
 

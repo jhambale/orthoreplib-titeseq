@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 """
 Created on 2026 May 11
@@ -7,7 +6,7 @@ Created on 2026 May 11
 
 14_cluster_eval_variants.py
 ===========================
-Performs GMM-based clustering on EC50 (Kd) values from Tite-Seq passed
+Performs GMM-based clustering on midpoint EC50 values from Tite-Seq passed
 variants, plots mutation-distance histograms per cluster, and runs the same
 average-score plotting and per-point-mutation context analysis as done in
 Neutral_Drift_Miguel/.../19_neutvariants.py.
@@ -15,7 +14,7 @@ Neutral_Drift_Miguel/.../19_neutvariants.py.
 Steps
 -----
 1.  Load passed-variants CSV (output of 10_compute_Kds.py).
-2.  Compute log10(Kd) per replicate; GMM fit (BIC-optimal, max 3 components)
+2.  Compute log10(midpoint EC50) per replicate; GMM fit (BIC-optimal, max 3 components)
     → labels: "Tight Binder", "Moderate Binder", "Weak Binder".
 3.  Plot replicate scatter coloured by GMM label (mirroring 14_ scatter).
 4.  Plot per-cluster mutation-distance histograms relative to the 'parent'
@@ -29,11 +28,11 @@ Steps
     with WT-distance zone separators (plot_seqavgs from 19_).
 6.  Build single-mutant families from the library aa_sequences; for each
     point mutation with >= min_contexts contexts:
-        - plot binding-score (log10 Kd avg) for each context
+        - plot binding-score (log10 midpoint EC50 avg) for each context
         - compute pairwise context distances and histogram them
         - accumulate delta-EC50 values for ridge plot
-7.  Ridge plot of delta-log10(Kd) per point mutation.
-8.  DMS-like heatmap of single-mutation effect on log10(Kd).
+7.  Ridge plot of delta-log10(midpoint EC50) per point mutation.
+8.  DMS-like heatmap of single-mutation effect on log10(midpoint EC50).
 
 Usage
 -----
@@ -68,9 +67,9 @@ from utils_nd import (
 # ---------------------------------------------------------------------------
 
 CATEGORY_COLORS = {
-    "Tight Binder": "#1a7a4a",  # dark green — smallest Kd
+    "Tight Binder": "#1a7a4a",  # dark green — smallest midpoint EC50
     "Moderate Binder": "#3B71B2",  # blue
-    "Weak Binder": "grey",  # largest Kd
+    "Weak Binder": "grey",  # largest midpoint EC50
 }
 
 
@@ -339,10 +338,10 @@ def plot_mutation_frequency_comparison(
 
 def plot_seqavgs(library_org_df: pd.DataFrame, fasta_name: str, org_outpath: str):
     """
-    Plot average log10(Kd) per sequence ordered by number of mutations from
+    Plot average log10(midpoint EC50) per sequence ordered by mutation count
     parent, with vertical dashed separators between mutation-distance groups.
 
-    Mirrors plot_seqavgs() in 19_neutvariants.py but uses log10(Kd_avg) as
+    Mirrors plot_seqavgs() in 19_neutvariants.py but uses log10(midpoint EC50)
     the y-axis value.
     """
     colors_org = sns.color_palette("husl", len(library_org_df))
@@ -351,8 +350,8 @@ def plot_seqavgs(library_org_df: pd.DataFrame, fasta_name: str, org_outpath: str
 
     plt.figure(figsize=(20, 6))
     for seq in range(len(library_org_df)):
-        score_avg = library_org_df["log10_Kd_avg"].iloc[seq]
-        score_err = library_org_df["log10_Kd_err"].iloc[seq]
+        score_avg = library_org_df["log10_EC50_midpoint_avg"].iloc[seq]
+        score_err = library_org_df["log10_EC50_midpoint_err"].iloc[seq]
         plt.plot(seq, score_avg, marker="o", ms=4, color=colors_org[seq])
         plt.errorbar(
             seq,
@@ -368,8 +367,8 @@ def plot_seqavgs(library_org_df: pd.DataFrame, fasta_name: str, org_outpath: str
             high_var.append(seq)
 
     plt.xlabel("Sequence")
-    plt.ylabel("Average log10(Kd) [nM]")
-    plt.title(f"Average log10(Kd) for sequences in {fasta_name}")
+    plt.ylabel("Average log10(midpoint EC50 [nM])")
+    plt.title(f"Average log10(midpoint EC50) for sequences in {fasta_name}")
     plt.xlim(-0.5, None)
 
     xmino, xmaxo = plt.xlim()
@@ -415,29 +414,30 @@ def plot_mutation_contexts(
     mutidist_outpath: str,
 ):
     """
-    Plot log10(Kd_avg) before (WT residue, circle) and after (mutated residue,
+    Plot log10(midpoint EC50) before (WT residue, circle) and after (mutated residue,
     cross) the point mutation for every context, with WT-distance separators.
 
     Mirrors plot_mutation_contexts() in 19_neutvariants.py, substituting
-    log10(Kd_avg) for binding score.
+    log10(midpoint EC50) for binding score.
     """
     fig, ax = plt.subplots(figsize=(8, 6))
     wtdistances = []
     for row in range(len(pmutslice)):
         if (
-            pmutslice["delta_log10Kd"].iloc[row]
-            == pmutslice["log10Kd2"].iloc[row] - pmutslice["log10Kd1"].iloc[row]
+            pmutslice["delta_log10EC50_midpoint"].iloc[row]
+            == pmutslice["log10EC50_midpoint2"].iloc[row]
+            - pmutslice["log10EC50_midpoint1"].iloc[row]
         ):
             ax.plot(
                 row + 1,
-                pmutslice["log10Kd1"].iloc[row],
+                pmutslice["log10EC50_midpoint1"].iloc[row],
                 marker="o",
                 ms=5,
                 color=colors[row],
             )
             ax.plot(
                 row + 1,
-                pmutslice["log10Kd2"].iloc[row],
+                pmutslice["log10EC50_midpoint2"].iloc[row],
                 marker="x",
                 ms=5,
                 color=colors[row],
@@ -445,14 +445,14 @@ def plot_mutation_contexts(
         else:
             ax.plot(
                 row + 1,
-                pmutslice["log10Kd2"].iloc[row],
+                pmutslice["log10EC50_midpoint2"].iloc[row],
                 marker="o",
                 ms=5,
                 color=colors[row],
             )
             ax.plot(
                 row + 1,
-                pmutslice["log10Kd1"].iloc[row],
+                pmutslice["log10EC50_midpoint1"].iloc[row],
                 marker="x",
                 ms=5,
                 color=colors[row],
@@ -462,8 +462,8 @@ def plot_mutation_contexts(
     ax.plot([], [], marker="o", color="k", label="WT residue context")
     ax.plot([], [], marker="x", color="k", label="mutated residue context")
     ax.set_xlabel("Context")
-    ax.set_ylabel("log10(Kd) [nM]")
-    ax.set_title(f"log10(Kd) for contexts with {muti}")
+    ax.set_ylabel("log10(midpoint EC50 [nM])")
+    ax.set_title(f"log10(midpoint EC50) for contexts with {muti}")
     ax.legend(
         loc="upper right", bbox_to_anchor=(1.4, 1), borderaxespad=0, frameon=False
     )
@@ -573,13 +573,13 @@ def plot_context_ridges(
     ridge_outpath: str,
 ):
     """
-    Ridge (joy) plot of delta-log10(Kd) per point mutation.
+    Ridge (joy) plot of delta-log10(midpoint EC50) per point mutation.
     Mirrors plot_context_ridges() in 19_neutvariants.py.
     """
     sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
 
     order = (
-        ridgedata_df.groupby("mutation")["dlog10Kd"]
+        ridgedata_df.groupby("mutation")["dlog10EC50_midpoint"]
         .median()
         .sort_values(ascending=False)
         .index
@@ -602,7 +602,7 @@ def plot_context_ridges(
 
     g.map(
         sns.kdeplot,
-        "dlog10Kd",
+        "dlog10EC50_midpoint",
         bw_adjust=0.5,
         clip_on=False,
         fill=True,
@@ -611,7 +611,7 @@ def plot_context_ridges(
         warn_singular=False,
     )
     g.map(plt.axhline, y=0, lw=2, clip_on=False)
-    g.map(sns.kdeplot, "dlog10Kd", clip_on=False, color="white", lw=2, bw_adjust=0.5)
+    g.map(sns.kdeplot, "dlog10EC50_midpoint", clip_on=False, color="white", lw=2, bw_adjust=0.5)
     g.refline(y=0, linewidth=2, linestyle="-", color=None, clip_on=False)
 
     def label(x, color, label):
@@ -627,13 +627,13 @@ def plot_context_ridges(
             transform=ax.transAxes,
         )
 
-    g.map(label, "dlog10Kd")
+    g.map(label, "dlog10EC50_midpoint")
     g.figure.subplots_adjust(hspace=-0.3)
     g.set_titles("")
     g.set(yticks=[], ylabel="")
-    g.set_xlabels("Δlog10(Kd)  [nM]", fontsize=14)
+    g.set_xlabels("Δlog10(midpoint EC50 [nM])", fontsize=14)
     g.despine(bottom=True, left=True)
-    plt.suptitle(f"Point-mutation Δlog10(Kd)  ({fasta_name})", fontsize=16, y=0.95)
+    plt.suptitle(f"Point-mutation Δlog10(midpoint EC50)  ({fasta_name})", fontsize=16, y=0.95)
     plt.savefig(ridge_outpath, format="png", dpi=500, bbox_inches="tight")
     print(f"ridge figure saved at {ridge_outpath}")
     plt.close()
@@ -641,7 +641,7 @@ def plot_context_ridges(
 
 def plot_dms(heatmap_matrix: pd.DataFrame, fasta_name: str, heatmap_outpath: str):
     """
-    Deep-mutational-scanning-style heatmap of single-mutation Δlog10(Kd).
+    Deep-mutational-scanning-style heatmap of single-mutation Δlog10(midpoint EC50).
     Mirrors plot_dms() in 19_neutvariants.py.
     """
     plt.rcParams.update({"font.size": 25})
@@ -650,18 +650,18 @@ def plot_dms(heatmap_matrix: pd.DataFrame, fasta_name: str, heatmap_outpath: str
         heatmap_matrix,
         annot=True,
         fmt=".2f",
-        cmap="coolwarm_r",  # reversed: blue = lower Kd = better
+        cmap="coolwarm_r",  # reversed: blue = lower midpoint EC50 = better
         center=0,
         linewidths=0.5,
         linecolor="gray",
-        cbar_kws={"label": "Δlog10(Kd) [nM]"},
+        cbar_kws={"label": "Δlog10(midpoint EC50 [nM])"},
         annot_kws={"fontsize": 25, "rotation": 90},
     )
     ax.set_xticklabels(heatmap_matrix.columns, rotation=90, fontsize=20)
     ax.set_yticklabels(heatmap_matrix.index, rotation=0, fontsize=20)
     plt.xlabel("Sequence Position (WT residue)")
     plt.ylabel("Mutant residue")
-    plt.title(f"Single-mutation Δlog10(Kd) heatmap for {fasta_name}", fontsize=40)
+    plt.title(f"Single-mutation Δlog10(midpoint EC50) heatmap for {fasta_name}", fontsize=40)
     plt.savefig(heatmap_outpath, format="png", dpi=500, bbox_inches="tight")
     print(f"DMS figure saved at {heatmap_outpath}")
     plt.close()
@@ -674,7 +674,7 @@ def plot_dms(heatmap_matrix: pd.DataFrame, fasta_name: str, heatmap_outpath: str
 
 def main():
     parser = argparse.ArgumentParser(
-        description="GMM clustering of EC50/Kd values and context analysis.",
+        description="GMM clustering of replicate midpoint EC50 values and context analysis.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -704,7 +704,7 @@ def main():
         "-d",
         type=float,
         default=0.2,
-        help="Minimum |Δlog10(Kd)| to be considered significant for multi-aa contexts (default: 0.2).",
+        help="Minimum |Δlog10(midpoint EC50)| for multi-aa context plots (default: 0.2).",
     )
     parser.add_argument(
         "-p",
@@ -735,28 +735,61 @@ def main():
     print(f"Output directory: {out_dir}")
 
     df = pd.read_csv(csv_path)
-    print(f"Loaded {len(df)} passed variants.")
+    if "passed" not in df.columns:
+        raise ValueError(
+            "Input CSV must include the 'passed' column from script 10 so "
+            "script 14 can verify and retain only passed variants."
+        )
+    passed_mask = df["passed"].astype(str).str.strip().str.lower().isin(
+        {"true", "1", "yes"}
+    )
+    excluded_not_passed = int((~passed_mask).sum())
+    df = df.loc[passed_mask].copy()
+    print(
+        f"Loaded {len(df)} passed variants; excluded {excluded_not_passed} "
+        "rows not marked passed."
+    )
+    if df.empty:
+        raise ValueError("Input CSV contains no rows marked as passed.")
 
     # ------------------------------------------------------------------
-    # 2. Identify replicate Kd columns
+    # 2. Identify replicate midpoint EC50 columns
     # ------------------------------------------------------------------
-    kd_cols = [c for c in df.columns if re.match(r"rep\d+_Kd$", c)]
-    if len(kd_cols) < 1:
+    ec50_cols = [
+        c for c in df.columns if re.match(r"rep\d+_EC50_midpoint_nM$", c)
+    ]
+    if len(ec50_cols) < 1:
         raise ValueError(
-            "No rep*_Kd columns found.  Make sure the input is "
+            "No rep*_EC50_midpoint_nM columns found. Make sure the input is "
             "tite_seq_Kds_passed_variants.csv from 10_compute_Kds.py."
         )
-    print(f"Replicate Kd columns: {kd_cols}")
+    print(f"Replicate midpoint EC50 columns: {ec50_cols}")
+
+    # Retain only passed variants with valid midpoint EC50 values for every replicate.
+    for col in ec50_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    valid_ec50_mask = (df[ec50_cols] > 0).all(axis=1) & np.isfinite(
+        df[ec50_cols]
+    ).all(axis=1)
+    invalid_ec50_count = int((~valid_ec50_mask).sum())
+    if invalid_ec50_count:
+        print(
+            f"Excluded {invalid_ec50_count} passed variants without positive, "
+            "finite midpoint EC50 values for every replicate."
+        )
+    df = df.loc[valid_ec50_mask].copy()
+    if df.empty:
+        raise ValueError("No passed variants have valid midpoint EC50 values.")
 
     # ------------------------------------------------------------------
-    # 2a. Compute log10(Kd) and parent aa sequence
+    # 2a. Compute log10(midpoint EC50) and parent aa sequence
     # ------------------------------------------------------------------
-    for col in kd_cols:
+    for col in ec50_cols:
         df[f"log10_{col}"] = np.log10(df[col])
 
-    log10_cols = [f"log10_{c}" for c in kd_cols]
-    df["log10_Kd_avg"] = df[log10_cols].mean(axis=1)
-    df["log10_Kd_err"] = df[log10_cols].std(axis=1)
+    log10_cols = [f"log10_{c}" for c in ec50_cols]
+    df["log10_EC50_midpoint_avg"] = df[log10_cols].mean(axis=1)
+    df["log10_EC50_midpoint_err"] = df[log10_cols].std(axis=1)
 
     # Determine parent aa sequence
     parent_aa_seq = None
@@ -806,13 +839,13 @@ def main():
         )
 
     # ------------------------------------------------------------------
-    # 3. GMM fit on log10(Kd) values  (BIC-optimal, max 3 components)
+    # 3. GMM fit on log10(midpoint EC50) values  (BIC-optimal, max 3 components)
     # ------------------------------------------------------------------
     X_df = df[log10_cols].apply(pd.to_numeric, errors="coerce").dropna()
     df = df.loc[X_df.index].reset_index(drop=True)
     X_df = X_df.reset_index(drop=True)
     X = X_df.values
-    mean_log10Kd = X_df.mean(axis=1).values
+    mean_log10_ec50 = X_df.mean(axis=1).values
 
     print(f"Scoring matrix: {X.shape[0]} sequences × {X.shape[1]} replicates")
     for col in X_df.columns:
@@ -820,10 +853,10 @@ def main():
             f"  {col}: min={X_df[col].min():.3f}  max={X_df[col].max():.3f}  mean={X_df[col].mean():.3f}"
         )
 
-    # GMM is fit on the 1-D mean log10(Kd) across replicates so that
+    # GMM is fit on the 1-D mean log10(midpoint EC50) across replicates so that
     # classification depends purely on the per-sequence average, not on
     # replicate-specific scatter or deviation from the diagonal.
-    X_1d = mean_log10Kd.reshape(-1, 1)
+    X_1d = mean_log10_ec50.reshape(-1, 1)
 
     best_gmm = None
     best_bic = np.inf
@@ -843,17 +876,17 @@ def main():
     gmm_labels = best_gmm.predict(X_1d)
     component_means = best_gmm.means_.flatten()  # 1-D: one mean per component
     component_weights = best_gmm.weights_
-    sorted_idx = np.argsort(component_means)  # low → high log10Kd (tight → weak)
+    sorted_idx = np.argsort(component_means)  # low → high log10 midpoint EC50
     for rank, ci in enumerate(sorted_idx.tolist()):
         print(
-            f"  component {rank}: mean_log10Kd={component_means[ci]:.3f}"
+            f"  component {rank}: mean_log10_midpoint_EC50={component_means[ci]:.3f}"
             f"  weight={component_weights[ci]:.4f}"
             f"  ({component_weights[ci] * len(X_1d):.0f} seqs)"
         )
 
     # Assign labels directly from the sorted component means — no threshold
     # percentiles needed because we are in 1-D and components are already
-    # ordered tight → moderate → weak by their mean log10(Kd).
+    # ordered tight → moderate → weak by their mean log10(midpoint EC50).
     category_order = ["Tight Binder", "Moderate Binder", "Weak Binder"]
     raw_labels = np.empty(len(X_1d), dtype=object)
     for rank, ci in enumerate(sorted_idx.tolist()):
@@ -863,14 +896,14 @@ def main():
     # Fallback: ensure all three categories are populated when n_components < 3
     if "Tight Binder" not in raw_labels:
         print("  [WARN] No Tight Binder component — assigning lower tertile")
-        raw_labels[mean_log10Kd <= np.percentile(mean_log10Kd, 33)] = "Tight Binder"
+        raw_labels[mean_log10_ec50 <= np.percentile(mean_log10_ec50, 33)] = "Tight Binder"
     if "Weak Binder" not in raw_labels:
         print("  [WARN] No Weak Binder component — assigning upper tertile")
-        raw_labels[mean_log10Kd >= np.percentile(mean_log10Kd, 67)] = "Weak Binder"
+        raw_labels[mean_log10_ec50 >= np.percentile(mean_log10_ec50, 67)] = "Weak Binder"
     if "Moderate Binder" not in raw_labels:
         tight_mask = raw_labels == "Tight Binder"
-        split_t = np.median(mean_log10Kd[tight_mask])
-        raw_labels[(raw_labels == "Tight Binder") & (mean_log10Kd >= split_t)] = (
+        split_t = np.median(mean_log10_ec50[tight_mask])
+        raw_labels[(raw_labels == "Tight Binder") & (mean_log10_ec50 >= split_t)] = (
             "Moderate Binder"
         )
 
@@ -945,17 +978,21 @@ def main():
             [min_val, max_val], [min_val, max_val], "b--", linewidth=1, label="y=x"
         )  # y=x unchanged: axes swapped so line stays correct
 
-        # Strip the 'log10_' prefix and '_Kd' suffix to get a clean 'repX' label
+        # Strip the log prefix and midpoint concentration suffix for the legend.
         def _rep_label(col_name: str) -> str:
-            return re.sub(r"^log10_(.+)_Kd$", r"\1", col_name)
+            return re.sub(
+                r"^log10_(.+)_EC50_midpoint_nM$", r"\1", col_name
+            )
 
         ax.set_xlabel(
-            f"$\\log_{{10}}(EC_{{50}})$  {_rep_label(best_j)}  (nM)", fontsize=14
+            f"$\\log_{{10}}(EC_{{50}})$ {_rep_label(best_j)} (nM)", fontsize=14
         )
         ax.set_ylabel(
-            f"$\\log_{{10}}(EC_{{50}})$  {_rep_label(best_i)}  (nM)", fontsize=14
+            f"$\\log_{{10}}(EC_{{50}})$ {_rep_label(best_i)} (nM)", fontsize=14
         )
-        ax.set_title(f"GMM clustering of Tite-Seq Kd  ({fasta_name})", fontsize=14)
+        ax.set_title(
+            "GMM clustering of Tite-Seq EC50 Values by Replicate", fontsize=14
+        )
         ax.text(
             0.02,
             0.95,
@@ -1145,18 +1182,24 @@ def main():
             fh.write(f"{cat}: {n_cat}/{total} ({100 * n_cat / total:.2f}%)\n")
 
     # ------------------------------------------------------------------
-    # 6. Average log10(Kd) per sequence sorted by mutation distance  (plot_seqavgs)
+    # 6. Average log10(midpoint EC50) per sequence sorted by mutation distance.
     # ------------------------------------------------------------------
     try:
         library_org_df = df.sort_values(
-            ["number_aa_mutations", "log10_Kd_avg", "log10_Kd_err"]
+            [
+                "number_aa_mutations",
+                "log10_EC50_midpoint_avg",
+                "log10_EC50_midpoint_err",
+            ]
         ).reset_index(drop=True)
-        org_outpath = str(out_dir_figs / f"{expt_id}_seqs_avglog10Kd.png")
+        org_outpath = str(
+            out_dir_figs / f"{expt_id}_seqs_avglog10_midpoint_EC50.png"
+        )
         high_var = plot_seqavgs(library_org_df, fasta_name, org_outpath)
         if len(high_var) == 0:
             print("No sequences with high variance.")
         else:
-            print(f"{len(high_var)} sequences with high log10(Kd) variance.")
+            print(f"{len(high_var)} sequences with high midpoint EC50 variance.")
     except Exception as e:
         print(f"[WARN] plot_seqavgs failed: {e}")
         library_org_df = df.sort_values("number_aa_mutations").reset_index(drop=True)
@@ -1201,16 +1244,16 @@ def main():
                     varslice = library_org_df[library_org_df["aa_sequence"] == variant]
                     if seqslice.empty or varslice.empty:
                         continue
-                    kd1 = seqslice["log10_Kd_avg"].item()
-                    kd2 = varslice["log10_Kd_avg"].item()
+                    ec50_1 = seqslice["log10_EC50_midpoint_avg"].item()
+                    ec50_2 = varslice["log10_EC50_midpoint_avg"].item()
                     if seqdist <= vardist:
                         dist = seqdist
-                        dkd = kd2 - kd1  # positive = weaker binder with mutation
+                        delta_ec50 = ec50_2 - ec50_1
                         pointmut = find_mutations(sequence, variant)
                         wt_muts = find_mutations(parent_aa_seq, sequence)
                     else:
                         dist = vardist
-                        dkd = kd1 - kd2
+                        delta_ec50 = ec50_1 - ec50_2
                         pointmut = find_mutations(variant, sequence)
                         wt_muts = find_mutations(parent_aa_seq, variant)
                     mutrec.append(
@@ -1225,9 +1268,9 @@ def main():
                             )
                             if pointmut
                             else -1,
-                            "log10Kd1": kd1,
-                            "log10Kd2": kd2,
-                            "delta_log10Kd": dkd,
+                            "log10EC50_midpoint1": ec50_1,
+                            "log10EC50_midpoint2": ec50_2,
+                            "delta_log10EC50_midpoint": delta_ec50,
                         }
                     )
 
@@ -1248,9 +1291,15 @@ def main():
                     mutrec_sort_df["point_mutation"].apply(lambda x: muti in x)
                 ]
                 pmutslice = pmutslice.sort_values(
-                    ["wild_type_distance", "log10Kd1", "log10Kd2"]
+                    [
+                        "wild_type_distance",
+                        "log10EC50_midpoint1",
+                        "log10EC50_midpoint2",
+                    ]
                 )
-                pmutslice = pmutslice.dropna(subset=["delta_log10Kd"]).copy()
+                pmutslice = pmutslice.dropna(
+                    subset=["delta_log10EC50_midpoint"]
+                ).copy()
 
                 if mutnum == 1:
                     if len(pmutslice) >= min_contexts:
@@ -1281,7 +1330,8 @@ def main():
                         contexts_dict[muti] = contexts
                 else:
                     sig_pmut = pmutslice[
-                        pmutslice["delta_log10Kd"].abs() > min_deltascore
+                        pmutslice["delta_log10EC50_midpoint"].abs()
+                        > min_deltascore
                     ]
                     if len(sig_pmut) > 0:
                         position = int(muti[1:-1]) - 1
@@ -1304,11 +1354,11 @@ def main():
                 all_sig_df.drop_duplicates(
                     subset=["sequence1", "sequence2"], keep="first"
                 ).rename(columns={"key": "mutation_of_interest"}).sort_values(
-                    "delta_log10Kd"
+                    "delta_log10EC50_midpoint"
                 ).to_csv(
                     str(
                         out_dir_pointmuts
-                        / f"{expt_id}_all{mutnum}aa_deldlog10Kd{min_deltascore}.csv"
+                        / f"{expt_id}_all{mutnum}aa_deldlog10_midpoint_EC50{min_deltascore}.csv"
                     )
                 )
 
@@ -1344,7 +1394,7 @@ def main():
                     hamming_dist_contexts, mutk, contexts_dict, mutkdist_outpath
                 )
 
-            # Accumulate delta-log10(Kd) per point mutation for ridge plot
+            # Accumulate delta-log10(midpoint EC50) per point mutation.
             mut_dict: dict = {}
             noref_dict: dict = {}
             for mutation in mutrec_sort_df["point_mutation"]:
@@ -1358,11 +1408,11 @@ def main():
                 )
                 if mutation_string[0] == parent_aa_seq[position]:
                     mut_dict[mutation_string] = list(
-                        mutrec_sort_df[mask]["delta_log10Kd"].values
+                        mutrec_sort_df[mask]["delta_log10EC50_midpoint"].values
                     )
                 else:
                     noref_dict[mutation_string] = list(
-                        mutrec_sort_df[mask]["delta_log10Kd"].values
+                        mutrec_sort_df[mask]["delta_log10EC50_midpoint"].values
                     )
 
             sorted_mut_dict = {k: sorted(v, reverse=True) for k, v in mut_dict.items()}
@@ -1372,7 +1422,9 @@ def main():
             for key, values in sorted_mut_dict.items():
                 if len(values) >= min_contexts:
                     for v in values:
-                        ridgedata.append({"mutation": key, "dlog10Kd": v})
+                        ridgedata.append(
+                            {"mutation": key, "dlog10EC50_midpoint": v}
+                        )
             ridgedata_df = pd.DataFrame(ridgedata)
             if not ridgedata_df.empty:
                 ridge_outpath = str(
@@ -1384,7 +1436,7 @@ def main():
                 )
 
             # ------------------------------------------------------------------
-            # DMS-like heatmap of single-mutation Δlog10(Kd)
+            # DMS-like heatmap of single-mutation Δlog10(midpoint EC50).
             # ------------------------------------------------------------------
             amino_acids_dict = {
                 "A": "Alanine",
@@ -1409,7 +1461,7 @@ def main():
                 "Y": "Tyrosine",
             }
 
-            # Parent log10(Kd) — use average over all parent rows
+            # Parent log10(midpoint EC50) — use average over all parent rows.
             parent_rows = library_org_df[
                 library_org_df["aa_sequence"].astype(str) == parent_aa_seq
             ]
@@ -1417,10 +1469,10 @@ def main():
                 print(
                     "[WARN] Parent sequence not in library; DMS heatmap will use 0 as reference."
                 )
-                parent_log10Kd = 0.0
+                parent_log10_ec50 = 0.0
             else:
-                parent_log10Kd = parent_rows["log10_Kd_avg"].mean()
-            print(f"Parent log10(Kd): {parent_log10Kd:.3f}")
+                parent_log10_ec50 = parent_rows["log10_EC50_midpoint_avg"].mean()
+            print(f"Parent log10(midpoint EC50): {parent_log10_ec50:.3f}")
 
             mutscore_dict: dict = {}
             for pos, res in enumerate(parent_aa_seq):
@@ -1437,9 +1489,9 @@ def main():
                     ]
                     if mut_seq_df.empty:
                         continue
-                    smutscore = mut_seq_df["log10_Kd_avg"].item()
+                    smutscore = mut_seq_df["log10_EC50_midpoint_avg"].item()
                     mutation_key = f"{res}{pos + 1}{mut}"
-                    mutscore_dict[mutation_key] = smutscore - parent_log10Kd
+                    mutscore_dict[mutation_key] = smutscore - parent_log10_ec50
 
             positions = list(range(1, len(parent_aa_seq) + 1))
             wtresidues = list(parent_aa_seq)

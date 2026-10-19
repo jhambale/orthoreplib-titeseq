@@ -55,6 +55,8 @@ Git tracks only these two example input text files, the ignore rules, and empty 
 
 Note that the subfolders in the 'outputs/' directory are created by the scripts and will not exist until the scripts are run. The subfolders in the 'raw/' directory must be created manually and populated with the appropriate input data before running the scripts.
 
+## Input Data Types and Structuring
+
 Starting with your input data:
 
 The critical data will be a set of FASTQ files containing the sequencing reads from your drifted libraries. Ensure that the files are named appropriately and are located in the specified input directory.
@@ -72,6 +74,8 @@ Some cell sorting experiments can lead to an uneven number of events counted for
 Once the desired cell counts and fluorescence values are in place in the appropriate directories, use script 01a_metadatafill.py to populate the metadata file with the cell count and fluorescence data for each bin. The example metadata file included in the repository (raw/jh_001/demultiplex/jh_001_metadata.txt) shows the expected format and structure of the metadata file. Ensure that your metadata file follows this format to avoid errors during analysis.
 
 Before proceeding, ensure that the appropriate reference FASTA files are present in the "references/" directory. These reference sequences will be used for aligning the merged reads and identifying mutations.
+
+## Running the stack of scripts
 
 Once the metadata file is generated using 01a_metadatafill.py, the desired FASTA files are in the reference directory, and the appropriately named FASTQ files are in the demultiplex directory, you may run script 04_filter_ngmerge_reads.sh. This bash script will analyze, filter the reads by quality score, and merge the paired-end reads. The merged reads will then be compared to the reference fasta sequences to identify mutations. This output (.bam) will be stored in the "alignments/" directory.
 
@@ -101,12 +105,19 @@ The outputs of this script (all existing within the "tite_seq_Kds/" sub folder) 
 - EC50 correlation plots (as .png files) comparing the EC50 for each replicate after each successive step of filtering (i.e. all variants, remove low amplitude, remove poor fit, remove EC50 values outside the tested concentration range).
 - A subfolder containing the curve fits for each variant (as .png files), including a marker for the EC50 value on the curve, for each variant separated into 'passed' and 'failed' groups.
 
-This product is the key output of the pipeline, and any subsequent scripts are just additionall analysis on the Kd values. A brief description of each script is as follows:
+(updated 19 OCT 2026). Rather than relying on the sigmoidal fit its associated Kd value for downstream analysis, a more direct midpoint calculation is done and assigned to each variant as a EC50 Midpoint. The calculation is done by taking the half max fluorescence value (midway between the min and max fluorescence input), then finding the concentration coordinate along the curve that corresponds to that midpoint fluorescence value. All initially output values remain stored in the output csv files.
+
+(updated 19 OCT 2026). A new criteria for filtering out failed Hill Function fits has been implemented. The low amplitude dynamic range criteria is calculated the same, but after that the next acceptance criteria is related to an R^2 value that evaluates the fit of the curve to the input data. The requisite R^2 values is 0.9, with an optional argument available to change the R^2 acceptance criteria if desired.
+
+(updated 19 OCT 2026). An additional optional argument has been added to include a low concentration boundary augmentation to the fluorescence data fed in to Hill Function fitting. Briefly, the interval between concentrations is detected within the provided data range (e.g. 5 fold, 10 fold). Then, a lower bound extension is added 2 intervals below the lowest concentration and assigned the same fluorescence value as that of the lowest measured concentration. This value is included in the data for each variant's Hill function fit. All curve fits and downstream analysis are stored in a separate analysis subfolder, named "tite_seq_Kds_leftaugment".
+
+These products from script 10_compute_Kds.py are the key outputs of the pipeline, and any subsequent scripts are just additionall analysis on the Kd values. A brief description of each script is as follows:
 - 11_unique_muts.py: identifying point mutations and their frequencies above a user set cutoff
 - 12_failed_var_diagnosis.py: assesses failed variants across multiple experiments and prepares some key characterisitics for each variant (i.e. total sequencing reads, replicate agreement, etc.)
 - 13_ts_1conc_map.py: compares the distribution of EC50 scores to the normalized scores at a single concentration within the experiment in the form of a quintile-quintile plot. Further examines which concentration is most informative for the library based on how well the single concentration scores correlate with the EC50 values (i.e. maximizing quintile match).
 - 14_cluster_eval_variants.py: performs Gaussian Means clustering on the variants based on their EC50 values, then generates further plots for each clustered group (hamming distance from wild type, pairwise distance between the groups, etc.).
 - 15_network_nxrep.py: generates a network graph of the variants based on their mutational distances (nodes and lines) and EC50 values (color fill of the nodes). This script uses the NetworkX library to create a visual representation of the relationships between variants, allowing for easy identification of clusters and outliers. Only the most connected subset of all variants are shown.
+(updated 19 OCT 2026). The scripts '14_' and '15_' have been updated to intake the midpoint EC50 values for further analysis, replacing the prior fit Kd values that were being used. 
 - 17_drift_dispersity.py: generates dimensional reduction plots for the all variants and each subcluster (reduction uses PACMAP).
 - 18_ec50scatter_interact.py: Generates a local html page of an interactive clustered scatter plot of the EC50 values for passed variants. The user can click any variant and see highlighted all variants 1 amino acid away.
 - 19_force_directed_layout.py: another 2D representation of the library variants that adjusts the 2D position of each variant based on mutational distance to neighbors as well as EC50 value (closer indicates greater similarity).

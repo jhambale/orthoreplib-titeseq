@@ -6,10 +6,11 @@ Created on November 10 16:04 2025
 @author: @jhambale
 example run:
     python 15_network_nxrep.py \
-    -i ../../titeseq_data/outputs/jh_002/tite_seq_Kds2/cluster_eval_tite_seq_Kds_passed_variants/tite_seq_clustered_tite_seq_Kds_passed_variants.csv
+    -i ../../titeseq_data/outputs/jh_002/tite_seq_Kds/cluster_eval_tite_seq_Kds_passed_variants/tite_seq_clustered_tite_seq_Kds_passed_variants.csv
 
 Expects titeseq clustered variant CSV with columns:
-    aa_sequence, log10_rep1_Kd, log10_rep2_Kd, number_aa_mutations, predicted_category
+    aa_sequence, passed, rep*_EC50_midpoint_nM, number_aa_mutations,
+    predicted_category
 """
 
 import argparse
@@ -18,7 +19,6 @@ import os
 import re
 from typing import Dict, List, Tuple
 
-import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -50,7 +50,7 @@ def build_sequence_network(
 
     # Add nodes with their scores as attributes
     for seq, score in node_data.items():
-        G.add_node(seq, score=score)
+        G.add_node(seq, score=score, log10_midpoint_EC50_avg=score)
 
     # Add edges between sequences that differ by exactly 1 amino acid
     for i, seq1 in enumerate(sequences):
@@ -86,7 +86,12 @@ def build_sequence_network_with_frequency(
 
     # Add nodes with their scores and frequencies as attributes
     for seq, score, freq in zip(sequences, scores, frequencies):
-        G.add_node(seq, score=score, frequency=freq)
+        G.add_node(
+            seq,
+            score=score,
+            log10_midpoint_EC50_avg=score,
+            frequency=freq,
+        )
 
     # Add edges between sequences that differ by exactly 1 amino acid
     print(f"Building edges for {len(sequences)} sequences...")
@@ -176,7 +181,7 @@ def visualize_network(
 
     # Normalize scores for colormap
     norm = mcolors.Normalize(vmin=min(scores), vmax=max(scores))
-    cmap_obj = cm.get_cmap(cmap)
+    cmap_obj = plt.get_cmap(cmap)
 
     # Draw network
     nx.draw_networkx_edges(G_plot, pos, alpha=0.3, width=1.5, edge_color="gray", ax=ax)
@@ -196,7 +201,9 @@ def visualize_network(
 
     # Add colorbar for scores
     cbar = plt.colorbar(nodes, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label("log10 Kd (avg)", rotation=270, labelpad=20, fontsize=12)
+    cbar.set_label(
+        "Mean log10 midpoint EC50 (nM)", rotation=270, labelpad=20, fontsize=12
+    )
 
     # # Add size legend (commented out - uniform node size used)
     # if size_by:
@@ -323,6 +330,7 @@ def export_for_cytoscape(
             {
                 "sequence": node,
                 "function_score": node_data[node],
+                "log10_midpoint_EC50_avg": node_data[node],
                 "degree": degrees[node],
                 "sequence_length": len(node),
             }
@@ -430,6 +438,7 @@ def export_node_attributes_detailed(G: nx.Graph, node_data: Dict, output_file: s
             {
                 "sequence": node,
                 "function_score": node_data[node],
+                "log10_midpoint_EC50_avg": node_data[node],
                 "degree": G.degree(node),
                 "degree_centrality": degree_cent[node],
                 "betweenness_centrality": betweenness_cent[node],
@@ -495,12 +504,53 @@ def main():
     print(f"output directory: {dir_prefix}")
 
     score_seq_df = pd.read_csv(score_seq_path[0])
+    if "passed" not in score_seq_df.columns:
+        raise ValueError(
+            "Input clustered CSV must include the 'passed' column from "
+            "script 10; expected script 14 clustered output."
+        )
+    passed_mask = score_seq_df["passed"].astype(str).str.strip().str.lower().isin(
+        {"true", "1", "yes"}
+    )
+    excluded_not_passed = int((~passed_mask).sum())
+    score_seq_df = score_seq_df.loc[passed_mask].copy()
+    print(
+        f"Loaded {len(score_seq_df)} passed variants; excluded "
+        f"{excluded_not_passed} rows not marked passed."
+    )
+    if score_seq_df.empty:
+        raise ValueError("Input CSV contains no rows marked as passed.")
+
+    ec50_cols = sorted(
+        c
+        for c in score_seq_df.columns
+        if re.fullmatch(r"rep\d+_EC50_midpoint_nM", c)
+    )
+    if not ec50_cols:
+        raise ValueError(
+            "No rep*_EC50_midpoint_nM columns found; expected midpoint EC50 "
+            "values from script 10."
+        )
+    for column in ec50_cols:
+        score_seq_df[column] = pd.to_numeric(score_seq_df[column], errors="coerce")
+    valid_ec50_mask = (score_seq_df[ec50_cols] > 0).all(axis=1) & np.isfinite(
+        score_seq_df[ec50_cols]
+    ).all(axis=1)
+    excluded_invalid_ec50 = int((~valid_ec50_mask).sum())
+    if excluded_invalid_ec50:
+        print(
+            f"Excluded {excluded_invalid_ec50} passed variants without positive, "
+            "finite midpoint EC50 values for every replicate."
+        )
+    score_seq_df = score_seq_df.loc[valid_ec50_mask].copy()
+    if score_seq_df.empty:
+        raise ValueError("No passed variants have valid midpoint EC50 values.")
+
+    score_seq_df["average_score"] = np.log10(score_seq_df[ec50_cols]).mean(axis=1)
+    score_seq_df["log10_midpoint_EC50_avg"] = score_seq_df["average_score"]
+    print(f"Network node shading uses mean log10 midpoint EC50: {ec50_cols}")
 
     sequences = score_seq_df["aa_sequence"]
-
-    score_seq_df["average_score"] = score_seq_df[
-        ["log10_rep1_Kd", "log10_rep2_Kd"]
-    ].mean(axis=1)
 
     function_scores = score_seq_df["average_score"]
 
@@ -544,7 +594,7 @@ def main():
             node_data,
             expt_id,
             layout=str(style),  # Try 'circular', 'kamada_kawai', 'spectral'
-            cmap="RdYlGn_r",  # _r suffix inverts the map: green=low log10 Kd (tight binder), red=high (weak)
+            cmap="RdYlGn_r",  # lower midpoint EC50 is tighter binding
             node_size=200,
             # size_by="frequency",  # variable node size (commented out)
             # min_node_size=100,

@@ -64,6 +64,38 @@ def try_fit(concs, scores, bounds):
         return None, None
 
 
+def fitted_midpoint_concentration(
+    measured_scores: np.ndarray, fit_concs: np.ndarray, popt: np.ndarray
+) -> tuple[float, float]:
+    """Find where the fitted curve reaches the measured log-fluorescence midpoint."""
+    finite_scores = measured_scores[np.isfinite(measured_scores)]
+    if finite_scores.size == 0:
+        return np.nan, np.nan
+
+    midpoint_score = float((finite_scores.min() + finite_scores.max()) / 2)
+    fitted_scores = func_E50(fit_concs, *popt)
+    if not np.nanmin(fitted_scores) <= midpoint_score <= np.nanmax(fitted_scores):
+        return np.nan, midpoint_score
+
+    kd, amplitude, background = popt
+    midpoint_fluorescence = 10**midpoint_score
+    response_above_background = midpoint_fluorescence - background
+    denominator = amplitude - response_above_background
+
+    if (
+        not np.isfinite(midpoint_fluorescence)
+        or amplitude <= 0
+        or response_above_background <= 0
+        or denominator <= 0
+    ):
+        return np.nan, midpoint_score
+
+    midpoint_conc = kd * response_above_background / denominator
+    if not np.min(fit_concs) <= midpoint_conc <= np.max(fit_concs):
+        return np.nan, midpoint_score
+    return float(midpoint_conc), midpoint_score
+
+
 # --- Worker Function ---
 
 # --- Worker Function ---
@@ -80,11 +112,10 @@ def fit_variant_worker(task_args) -> Dict:
         y_limits,
         conc_labels,
         rep_ids,
-        kd_filter,
+        r2_cutoff,
         boundary_anchors,
     ) = task_args
 
-    conc_min, conc_max, ci_log_frac = kd_filter
     v_id = variant_data["variant_id"]
     safe_id = variant_data["safe_id"]
     aa_seq = variant_data["aa_sequence"]
@@ -105,8 +136,6 @@ def fit_variant_worker(task_args) -> Dict:
     variation_threshold = (
         0.5  # minimum log10 score range (~3-fold); below this is low_amplitude
     )
-    # conc_min, conc_max, ci_log_frac unpacked from kd_filter above
-
     for rep in rep_ids:
         scores = variant_data[f"{rep}_scores"]
         all_scores.append(scores)
@@ -127,17 +156,6 @@ def fit_variant_worker(task_args) -> Dict:
                 res[f"{rep}_low_anchor_applied"] = True
             else:
                 res[f"{rep}_low_anchor_applied"] = False
-            if scores_for_fit[-1] >= anchors["high_thresh"]:
-                concs_for_fit = np.concatenate(
-                    [concs_for_fit, [boundary_anchors["high_conc"]]]
-                )
-                scores_for_fit = np.concatenate(
-                    [scores_for_fit, [anchors["high_score"]]]
-                )
-                res[f"{rep}_high_anchor_applied"] = True
-            else:
-                res[f"{rep}_high_anchor_applied"] = False
-
         finite_mask = np.isfinite(scores_for_fit)
         popt, pcov = (
             try_fit(concs_for_fit, scores_for_fit, bounds)
@@ -160,19 +178,26 @@ def fit_variant_worker(task_args) -> Dict:
             )
             all_fits.append(np.full_like(conc_fits, np.nan))
             ec50_points.append((np.nan, np.nan))
+            res[f"{rep}_EC50_midpoint_nM"] = np.nan
+            res[f"{rep}_midpoint_log10_fluorescence"] = np.nan
         else:
             kd, as_val, b_val = popt
             kd_std = float(np.sqrt(pcov[0, 0])) if np.isfinite(pcov[0, 0]) else np.nan
+            ec50_midpoint, midpoint_score = fitted_midpoint_concentration(
+                scores, conc_fits, popt
+            )
             res.update(
                 {
                     f"{rep}_Kd": kd,
                     f"{rep}_Kd_std": kd_std,
                     f"{rep}_As": as_val,
                     f"{rep}_B": b_val,
+                    f"{rep}_EC50_midpoint_nM": ec50_midpoint,
+                    f"{rep}_midpoint_log10_fluorescence": midpoint_score,
                 }
             )
             all_fits.append(func_E50(conc_fits, *popt))
-            ec50_points.append((kd, float(func_E50(np.array([kd]), *popt)[0])))
+            ec50_points.append((ec50_midpoint, midpoint_score))
 
             # R² and adjusted R² computed on the same data points used for fitting
             _concs_used = concs_for_fit[finite_mask]
@@ -212,35 +237,15 @@ def fit_variant_worker(task_args) -> Dict:
             #
             # 1. low_amplitude: fires if either —
             #    a) the observed fluorescence rise is below variation_threshold
-            #       (curve too flat to trust the fitted Kd), or
+            #       (curve too flat to trust the fitted response midpoint), or
             #    b) the curve is inverted: the concentration at peak fluorescence
             #       is lower than the concentration at minimum fluorescence,
             #       indicating a non-sigmoidal or noisy titration.
             #
-            # 2. kd_out_of_bounds: the fit converged but the uncertainty is too
-            #    large when expressed in log10(Kd) space, where the comparison
-            #    is symmetric.  The propagated 1-sigma uncertainty on log10(Kd)
-            #    is kd_std / (kd * ln(10)).  If this exceeds ci_log_frac the
-            #    replicate fails.  Working in log space avoids the asymmetry of
-            #    a linear fraction check (e.g. +50% and -50% of Kd are not
-            #    equidistant on the log scale that binding curves occupy).
-            #
-            # 3. kd_past_max: the Kd point estimate itself lies outside the
-            #    measured concentration range [conc_min, conc_max].  This fires
-            #    only after the CI quality check, so it catches fits that are
-            #    precise but extrapolate beyond the titration range.
-            log10_kd_std = (
-                kd_std / (kd * np.log(10))
-                if (np.isfinite(kd_std) and kd > 0)
-                else np.inf
-            )
-
             if dynamic_range < variation_threshold or curve_inverted:
                 rep_fail = "low_amplitude"
-            elif log10_kd_std > ci_log_frac:
-                rep_fail = "kd_out_of_bounds"
-            elif kd < conc_min or kd > conc_max:
-                rep_fail = "kd_past_max"
+            elif not np.isfinite(_r2) or _r2 < r2_cutoff:
+                rep_fail = "low_r2"
 
         rep_fail_reasons.append(rep_fail)
 
@@ -250,10 +255,9 @@ def fit_variant_worker(task_args) -> Dict:
     else:
         # Report the highest-priority failure reason across replicates
         priority = [
-            "no_fit",
             "low_amplitude",
-            "kd_out_of_bounds",
-            "kd_past_max",
+            "low_r2",
+            "no_fit",
         ]
         for reason in priority:
             if reason in rep_fail_reasons:
@@ -265,10 +269,8 @@ def fit_variant_worker(task_args) -> Dict:
             subfolder = "passed"
         elif res["fail_reason"] == "low_amplitude":
             subfolder = "failed/low_amplitude"
-        elif res["fail_reason"] == "kd_past_max":
-            subfolder = "failed/kd_past_max"
-        elif res["fail_reason"] == "kd_out_of_bounds":
-            subfolder = "failed/kd_out_of_bounds"
+        elif res["fail_reason"] == "low_r2":
+            subfolder = "failed/low_r2"
         else:
             subfolder = "failed/other"
         target_dir = plot_dir / subfolder
@@ -348,12 +350,18 @@ def plot_variant(
                 markersize=8,
                 markeredgecolor="black",
                 color=color,
-                label=f"{label} EC50",
+                label=f"{label} midpoint EC50",
                 zorder=4,
             )
 
     ax.set_xscale("log")
-    ax.set_xlim(concs_numeric.min() * 0.8, concs_numeric.max() * 1.2)
+    plotted_ec50s = [
+        ec50_conc
+        for ec50_conc, ec50_score in ec50_points
+        if np.isfinite(ec50_conc) and np.isfinite(ec50_score)
+    ]
+    x_limits = np.concatenate([concs_numeric, plotted_ec50s])
+    ax.set_xlim(x_limits.min() * 0.8, x_limits.max() * 1.2)
     ax.xaxis.set_major_locator(mticker.FixedLocator(concs_numeric))
     ax.xaxis.set_minor_locator(mticker.NullLocator())
     ax.set_ylim([y_min, y_max])
@@ -397,14 +405,21 @@ def plot_global_correlations(
     r1, r2 = rep_ids[0], rep_ids[1]
     subset = results_df.copy()
 
-    finite_mask = (np.isfinite(subset[f"{r1}_Kd"])) & (np.isfinite(subset[f"{r2}_Kd"]))
+    ec50_col_1 = f"{r1}_EC50_midpoint_nM"
+    ec50_col_2 = f"{r2}_EC50_midpoint_nM"
+    finite_mask = np.isfinite(subset[ec50_col_1]) & np.isfinite(
+        subset[ec50_col_2]
+    )
     subset = subset[finite_mask]
     if subset.empty:
-        print(f"No variants with valid Kds to plot for subset: '{label}'.")
+        print(
+            f"No variants with valid midpoint EC50 values to plot for subset: "
+            f"'{label}'."
+        )
         return
 
-    x = np.log10(subset[f"{r1}_Kd"].values)
-    y = np.log10(subset[f"{r2}_Kd"].values)
+    x = np.log10(subset[ec50_col_1].values)
+    y = np.log10(subset[ec50_col_2].values)
 
     xy = np.vstack([x, y])
     z = stats.gaussian_kde(xy)(xy)
@@ -473,47 +488,27 @@ def compute_boundary_anchors(
     concs_array: np.ndarray,
     rep_ids: List[str],
     output_dir: Path,
-    fold_interval: float = 5.0,
     proximity_fraction: float = 0.90,
 ) -> Dict:
-    """Compute imaginary boundary anchor points for curve-fit extension.
+    """Compute an imaginary low-concentration anchor for curve-fit extension.
 
-    For each replicate, the median score across all variants at the lowest and
-    highest tested concentrations is used as a 'collective boundary fluorescence
-    value'.  A variant qualifies for a boundary anchor at one end if its score
-    at that boundary concentration is within 90 % (proximity_fraction) of that
-    collective value — meaning it has essentially reached the floor/ceiling and
-    an imaginary point one fold-interval outside the range will help pin the
-    asymptote during fitting.
+    The median scores at the lowest and highest tested concentrations define
+    the low-end fluorescence floor and dynamic range. A variant qualifies for
+    an anchor if its score at the lowest concentration remains near that floor.
+    The typical fold interval is inferred from the measured concentrations, and
+    the imaginary concentration is placed two intervals below the lowest one.
 
-    The imaginary concentrations are:
-        low_imaginary  = concs_array.min() / fold_interval
-        high_imaginary = concs_array.max() * fold_interval
-
-    Proximity rules (on the log10-score axis):
-        HIGH end: variant score >= proximity_fraction * high_boundary_median
-        LOW  end: variant score <= low_boundary_median + (1 - proximity_fraction)
-                  * (high_boundary_median - low_boundary_median)
-          i.e. the score hasn't risen more than (1-proximity_fraction) of the
-          full dynamic range above the floor at the lowest concentration.
-
-    Returns a dict with keys:
-        'low_conc'        : imaginary low concentration (nM)
-        'high_conc'       : imaginary high concentration (nM)
-        'rep_anchors'     : { rep_id: {'low_score': float, 'high_score': float,
-                                       'low_thresh': float, 'high_thresh': float} }
-    Also saves a CSV and two histogram PNGs into output_dir.
+    Also saves a CSV and low-boundary histogram PNG into output_dir.
     """
     low_label = shared_labels[0]
     high_label = shared_labels[-1]
-    low_conc_imaginary = concs_array.min() / (2 * fold_interval)
-    high_conc_imaginary = concs_array.max() * (2 * fold_interval)
+    fold_interval = detect_concentration_interval(concs_array)
+    low_conc_imaginary = concs_array.min() / (fold_interval**2)
 
     rep_anchors = {}
     rows = []
 
     fig_low, ax_low = plt.subplots(figsize=(7, 4))
-    fig_high, ax_high = plt.subplots(figsize=(7, 4))
     palette = plt.get_cmap("tab10")(np.linspace(0, 1, len(rep_ids)))
 
     for i, rep in enumerate(rep_ids):
@@ -526,18 +521,13 @@ def compute_boundary_anchors(
         high_median = float(np.median(high_scores))
         total_range = high_median - low_median
 
-        # Proximity thresholds
-        high_thresh = proximity_fraction * high_median
         low_thresh = low_median + (1.0 - proximity_fraction) * total_range
 
         n_low = int((low_scores <= low_thresh).sum())
-        n_high = int((high_scores >= high_thresh).sum())
 
         rep_anchors[rep] = {
             "low_score": low_median,
-            "high_score": high_median,
             "low_thresh": low_thresh,
-            "high_thresh": high_thresh,
         }
         rows.append(
             {
@@ -547,11 +537,9 @@ def compute_boundary_anchors(
                 "low_boundary_score": low_median,
                 "high_boundary_score": high_median,
                 "low_proximity_thresh": low_thresh,
-                "high_proximity_thresh": high_thresh,
                 "n_variants_near_low": n_low,
-                "n_variants_near_high": n_high,
+                "detected_fold_interval": fold_interval,
                 "imaginary_low_conc_nM": low_conc_imaginary,
-                "imaginary_high_conc_nM": high_conc_imaginary,
             }
         )
 
@@ -570,39 +558,19 @@ def compute_boundary_anchors(
             label=f"{rep} 90% thresh",
         )
 
-        ax_high.hist(
-            high_scores, bins=40, alpha=0.6, color=color, label=rep, edgecolor="none"
-        )
-        ax_high.axvline(
-            high_median,
-            color=color,
-            linestyle="-",
-            linewidth=1.5,
-            label=f"{rep} median",
-        )
-        ax_high.axvline(
-            high_thresh,
-            color=color,
-            linestyle="--",
-            linewidth=1.0,
-            label=f"{rep} 90% thresh",
-        )
-
-    # Finalise and save histogram plots
-    for ax, fig, boundary, lbl in [
-        (ax_low, fig_low, f"{shared_labels[0]} (low boundary)", "low"),
-        (ax_high, fig_high, f"{shared_labels[-1]} (high boundary)", "high"),
-    ]:
-        ax.set_xlabel("log\u2081\u2080 fluorescence score", fontsize=12)
-        ax.set_ylabel("Variant count", fontsize=12)
-        ax.set_title(f"Boundary score distribution — {boundary}", fontsize=13)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        handles, labels_leg = ax.get_legend_handles_labels()
-        ax.legend(handles, labels_leg, fontsize=9, frameon=True)
-        fig.tight_layout()
-        fig.savefig(output_dir / f"boundary_scores_{lbl}.png", dpi=200)
-        plt.close(fig)
+    ax_low.set_xlabel("log\u2081\u2080 fluorescence score", fontsize=12)
+    ax_low.set_ylabel("Variant count", fontsize=12)
+    ax_low.set_title(
+        f"Boundary score distribution — {shared_labels[0]} (low boundary)",
+        fontsize=13,
+    )
+    ax_low.spines["top"].set_visible(False)
+    ax_low.spines["right"].set_visible(False)
+    handles, labels_leg = ax_low.get_legend_handles_labels()
+    ax_low.legend(handles, labels_leg, fontsize=9, frameon=True)
+    fig_low.tight_layout()
+    fig_low.savefig(output_dir / "boundary_scores_low.png", dpi=200)
+    plt.close(fig_low)
 
     # Save summary CSV
     pd.DataFrame(rows).to_csv(output_dir / "boundary_anchor_stats.csv", index=False)
@@ -614,18 +582,14 @@ def compute_boundary_anchors(
             f"  {r['replicate']}: "
             f"low_median={r['low_boundary_score']:.4f} "
             f"(thresh<={r['low_proximity_thresh']:.4f}, n={r['n_variants_near_low']}), "
-            f"high_median={r['high_boundary_score']:.4f} "
-            f"(thresh>={r['high_proximity_thresh']:.4f}, n={r['n_variants_near_high']})"
+            f"high_median={r['high_boundary_score']:.4f}"
         )
-    print(
-        f"  Imaginary concs: {low_conc_imaginary:.4f} nM (low), "
-        f"{high_conc_imaginary:.1f} nM (high)"
-    )
+    print(f"  Detected concentration interval: {fold_interval:.4g}-fold")
+    print(f"  Imaginary low concentration: {low_conc_imaginary:.4g} nM")
     print("-" * 30)
 
     return {
         "low_conc": low_conc_imaginary,
-        "high_conc": high_conc_imaginary,
         "rep_anchors": rep_anchors,
     }
 
@@ -647,25 +611,32 @@ def concentration_sort_key(label: str) -> float:
 
     Handles two formats:
       - XnM / X.YnM  (e.g. '0.64nM', '3.2nM', '16nM')  -> sort by nM value
-      - 10^-NM       (e.g. '10^-7M')                     -> sort by exponent
-    Unknowns sort last.
+      - 10^-NM       (e.g. '10^-7M')                     -> convert to nM
     """
     cleaned = label.replace(" ", "")
     # XnM format
     nm_match = re.match(r"^([\d.]+)nM$", cleaned, re.IGNORECASE)
     if nm_match:
-        try:
-            return float(nm_match.group(1))
-        except ValueError:
-            pass
+        return float(nm_match.group(1))
     # 10^-N M format
     sci_match = re.search(r"10\^-(?P<val>[-\d\.]+)", cleaned)
     if sci_match:
-        try:
-            return float(sci_match.group("val"))
-        except ValueError:
-            pass
-    return float("inf")
+        return 10 ** (-float(sci_match.group("val"))) * 1e9
+    raise ValueError(f"Cannot parse concentration label: '{label}'")
+
+
+def detect_concentration_interval(concs_array: np.ndarray) -> float:
+    """Infer the typical fold spacing from positive measured concentrations."""
+    values = np.asarray(concs_array, dtype=float)
+    concentrations = np.unique(values[np.isfinite(values) & (values > 0)])
+    if concentrations.size < 2:
+        raise ValueError(
+            "Boundary augmentation requires at least two distinct positive "
+            "concentrations to infer the concentration interval."
+        )
+
+    log_intervals = np.diff(np.log(concentrations))
+    return float(np.exp(np.median(log_intervals)))
 
 
 # --- Main Logic ---
@@ -680,63 +651,48 @@ def main():
         "-p", "--processes", type=int, default=mp.cpu_count(), help="CPU cores to use"
     )
     parser.add_argument(
-        "--conc-min",
+        "--r2-cutoff",
         type=float,
-        default=0.64,
-        help="Minimum concentration in the titration series (nM). "
-        "Used for kd_out_of_bounds and kd_past_max checks (default: 0.64)",
-    )
-    parser.add_argument(
-        "--conc-max",
-        type=float,
-        default=2000.0,
-        help="Maximum concentration in the titration series (nM). "
-        "Used for kd_out_of_bounds and kd_past_max checks (default: 2000)",
-    )
-    parser.add_argument(
-        "--ci-log-frac",
-        type=float,
-        default=0.5,
-        help="Maximum allowed 1-sigma uncertainty on log10(Kd).  Computed as "
-        "kd_std / (Kd * ln(10)), which is the propagated uncertainty of "
-        "log10(Kd) and is symmetric on the log scale.  A variant fails "
-        "kd_out_of_bounds if this value exceeds ci_log_frac. "
-        "(default: 0.5)",
+        default=0.90,
+        help="Minimum per-replicate R-squared required for a fit to pass "
+        "(default: 0.90)",
     )
     parser.add_argument(
         "-b",
         "--boundary-augmentation",
         action="store_true",
         default=False,
-        help="If set, augment fitting data with imaginary boundary anchor points "
-        "for variants near the fluorescence floor/ceiling. "
+        help="If set, augment fitting data with an imaginary low-concentration "
+        "anchor for variants near the fluorescence floor. "
         "If omitted, variants are fit to the measured concentrations only.",
     )
     args = parser.parse_args()
 
-    kd_filter = (args.conc_min, args.conc_max, args.ci_log_frac)
-    print(
-        f"Kd filter: conc_min={args.conc_min} nM, conc_max={args.conc_max} nM, "
-        f"ci_log_frac={args.ci_log_frac}"
-    )
+    if not 0 <= args.r2_cutoff <= 1:
+        parser.error("--r2-cutoff must be between 0 and 1.")
+    r2_cutoff = args.r2_cutoff
+    print(f"Fit filters: low amplitude; per-replicate R² >= {r2_cutoff:.2f}")
+    lower_bound = args.boundary_augmentation
 
     input_dir = Path(args.input)
     # 1. Output directory one level up
-    output_dir = input_dir.parent / "tite_seq_Kds"
+    if lower_bound:
+        output_dir = input_dir.parent / "tite_seq_Kds_leftaugment"
+    else:
+        output_dir = input_dir.parent / "tite_seq_Kds"
     plot_dir = output_dir / "score_vs_concs_plots"
 
     # Pre-create directories to avoid race conditions in multiprocessing
     make_dir(str(plot_dir))
     make_dir(str(plot_dir / "passed"))
     make_dir(str(plot_dir / "failed" / "low_amplitude"))
-    make_dir(str(plot_dir / "failed" / "kd_past_max"))
-    make_dir(str(plot_dir / "failed" / "kd_out_of_bounds"))
+    make_dir(str(plot_dir / "failed" / "low_r2"))
     make_dir(str(plot_dir / "failed" / "other"))
     if args.boundary_augmentation:
         make_dir(str(output_dir / "boundary_anchors"))
 
     # 2. Discover all CSV files and identify replicates
-    csv_files = sorted(list(input_dir.glob("*.csv")))
+    csv_files = sorted(input_dir.glob("*.csv"))
     replicate_dfs = {}
     for f in csv_files:
         # Extract repID (e.g., 'rep2' or 'rep3') from filename
@@ -814,22 +770,7 @@ def main():
     print(f"Using fixed y-axis range: {y_limits[0]} to {y_limits[1]}")
     print("-" * 30)
     # 4. Prepare fitting design
-    numeric_concs = []
-    for lbl in shared_labels:
-        cleaned = lbl.replace(" ", "")
-        # XnM format — value is already in nM
-        nm_match = re.match(r"^([\d.]+)nM$", cleaned, re.IGNORECASE)
-        if nm_match:
-            numeric_concs.append(float(nm_match.group(1)))
-            continue
-        # 10^-N M format — convert to nM
-        sci_match = re.search(r"10\^-(?P<val>.*)M", cleaned)
-        if sci_match:
-            numeric_concs.append(10 ** (-float(sci_match.group("val"))) * 1e9)
-            continue
-        raise ValueError(f"Cannot parse concentration label: '{lbl}'")
-
-    concs_array = np.array(numeric_concs)
+    concs_array = np.array([concentration_sort_key(lbl) for lbl in shared_labels])
 
     # 4b. Optionally compute boundary anchors (saves CSV + histograms)
     if args.boundary_augmentation:
@@ -841,11 +782,10 @@ def main():
             rep_ids=rep_ids,
             output_dir=output_dir / "boundary_anchors",
         )
-        # Extend conc_fits to cover the imaginary concentrations so the plotted
-        # fit curve runs all the way to both imaginary endpoints
+        # Extend the plotted fit curve below the lowest measured concentration.
         conc_fits = np.logspace(
             np.log10(boundary_anchors["low_conc"]),
-            np.log10(boundary_anchors["high_conc"]),
+            np.log10(concs_array.max()),
             300,
         )
     else:
@@ -892,7 +832,7 @@ def main():
                 y_limits,
                 shared_labels,
                 rep_ids,
-                kd_filter,
+                r2_cutoff,
                 boundary_anchors,
             )
         )
@@ -913,9 +853,7 @@ def main():
     passed_df = final_df[final_df["passed"] == True].copy()
     low_amp_df = final_df[final_df["fail_reason"] == "low_amplitude"].copy()
 
-    # Summary — failure reasons printed in the order they are removed from
-    # the progressive EC50 correlation plots.
-    failure_order = ["low_amplitude", "kd_out_of_bounds", "kd_past_max", "no_fit"]
+    failure_order = ["low_amplitude", "low_r2", "no_fit"]
     failed_df = final_df[final_df["passed"] == False]
     fail_counts = failed_df["fail_reason"].value_counts()
     print("-" * 30)
@@ -933,14 +871,10 @@ def main():
     )
 
     # ------------------------------------------------------------------ #
-    # Correlation plots — four progressive subsets                        #
+    # Correlation plots — progressively filtered subsets                 #
     # ------------------------------------------------------------------ #
     # Subset 2: remove low_amplitude failures
     no_low_amp_df = final_df[final_df["fail_reason"] != "low_amplitude"].copy()
-    # Subset 3: additionally remove kd_out_of_bounds failures
-    no_oob_df = no_low_amp_df[no_low_amp_df["fail_reason"] != "kd_out_of_bounds"].copy()
-    # Subset 4: additionally remove kd_past_max — should equal passed_df
-    no_past_max_df = no_oob_df[no_oob_df["fail_reason"] != "kd_past_max"].copy()
 
     correlation_subsets = [
         (final_df, "All Variants", "EC50_correlation_1_all.png"),
@@ -950,11 +884,10 @@ def main():
             "EC50_correlation_2_no_low_amplitude.png",
         ),
         (
-            no_oob_df,
-            "Without Low-Amplitude + OOB Failures",
-            "EC50_correlation_3_no_oob.png",
+            passed_df,
+            "Passed Variants",
+            "EC50_correlation_3_passed.png",
         ),
-        (no_past_max_df, "Passed Variants", "EC50_correlation_4_passed.png"),
     ]
 
     for subset_df, subset_label, filename in correlation_subsets:
@@ -966,7 +899,7 @@ def main():
     # ------------------------------------------------------------------ #
     # R² / adjusted-R² fit-quality summary                                #
     # ------------------------------------------------------------------ #
-    thresholds = [0.60, 0.75, 0.90, 0.95]
+    thresholds = sorted({0.60, 0.75, args.r2_cutoff, 0.95})
     r2_cols = [f"{rep}_r2" for rep in rep_ids]
     adj_r2_cols = [f"{rep}_adj_r2" for rep in rep_ids]
 

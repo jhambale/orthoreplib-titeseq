@@ -5,11 +5,12 @@ Created on January 29 08:24:51 2025
 @author: alcantar
 modifed by J. Hambalek on 18 July 2025
 imported changes from jupyter notebook '09nb_...' 01 August 2025
-example run 1: python 14_neutral_drift_analysis_input.py \
--i ../../minibinders_orthorep_data/minibinders_orthorep_outputs/jh_008/mutation_dfs/*mutation_analysis.csv \
--m ../../minibinders_orthorep_data/ngs_raw/jh_008/demultiplex/jh_008_metadata.txt \
--r ../../minibinders_orthorep_data/ngs_raw/jh_008/references/pmaa23_nbonly.fasta \
--c 25 -t 4 -f False
+example run 1: python 06_nd_analysis_oneconc.py \
+-i ../../titeseq_data/outputs/jh_010/mutation_dfs_whitelist/*.csv \
+-m ../../titeseq_data/raw/jh_010/demultiplex/jh_010_metadata.txt \
+-r ../../titeseq_data/raw/jh_010/references/pmaa23_nbonly.fasta \
+-c 2000 \
+-t 50
 """
 # activate virtual enviroment before running script
 # source activate minibinders

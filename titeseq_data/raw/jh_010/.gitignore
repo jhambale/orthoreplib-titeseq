@@ -1,0 +1,10 @@
+*
+!.gitignore
+!.gitkeep
+!cell_ct_out/
+!cell_ct_raw/
+!demultiplex/
+!demux_in/
+!fluor_raw/
+!raw_fastq/
+!references/

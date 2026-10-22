@@ -37,7 +37,7 @@ Usage
 -----
 python 13_ts_1conc_map.py \\
     --library-dir  ../../titeseq_data/outputs/jh_002/library_dfs \\
-    --passed-variants ../../titeseq_data/outputs/jh_002/tite_seq_Kds2/tite_seq_Kds_passed_variants.csv \\
+    --passed-variants ../../titeseq_data/outputs/jh_002/tite_seq_Kds/tite_seq_Kds_passed_variants.csv \\
     --output-dir   ../../titeseq_data/outputs/jh_002/ts_1conc_map
 """
 

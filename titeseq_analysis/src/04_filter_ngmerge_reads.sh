@@ -23,9 +23,10 @@
 # Only specify one of each read pair; the other
 # filename is assumed (R2 if R1, or R1 if R2.)
 # Example 1: bash 04_filter_ngmerge_reads.sh \
-# ../../minibinders_orthorep_data/raw/jh_024/demultiplex/jh_024_metadata.txt \
-# jh_024 \
-# ../../minibinders_orthorep_data/raw/jh_024/demultiplex/*_R1_001.fastq.gz
+# bash 04_filter_ngmerge_reads.sh \
+# ../../titeseq_data/raw/jh_011/demultiplex/jh_011_metadata.txt \
+# jh_011 \
+# ../../titeseq_data/raw/jh_011/demultiplex/*_R1_001.fastq.gz
 #
 ### OUTPUTS
 ## md5sum

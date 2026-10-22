@@ -2,58 +2,93 @@ TITESEQ STACK FOR DRIFTED LIBRARIES
 
 Author: Jacob Hambalek
 README Version 1.1. Date 9 OCT 2026
+Version 2.0, Date 22 OCT 2026
 
 Acknowledgements: Scripts were structured with guidance from Miguel Alcantar, PhD and Yutong Yu, PhD.
 
-This project, including scripts and documentation, were constructed with help from Zed Integrated Agents and Github Copilot.
+This project's scripts and documentation were constructed with help from Zed Integrated Agents and Github Copilot.
 
 Once you have installed the TITESEQ stack, you can use the following commands to run the analysis on your drifted libraries. Please ensure that you have all dependencies installed and that your environment is properly configured.
 
 ## Data directory layout
 
-The scripts use paths beneath `titeseq_data/`. Keep this layout when preparing an experiment; the `jh_001` raw-input and output directories are empty placeholders in this repository so that files are placed in the expected locations. Raw inputs belong under `titeseq_data/raw/<experiment>/` (for example, FASTQ files and metadata under `demultiplex/`, reference FASTA files under `references/`, and cell-count inputs under `cell_ct_raw/`). Git tracks the empty directory scaffold only; input files are ignored.
+The scripts use paths beneath `titeseq_data/`. Keep this layout when preparing an experiment; the `jh_001` and `jh_010` raw-input and output directories are placeholders in this repository so that files are placed in the expected locations. Raw inputs belong under `titeseq_data/raw/<experiment>/` (for example, FASTQ files and metadata under `demultiplex/`, reference FASTA files under `references/`, and cell-count inputs under `cell_ct_raw/`). Git tracks the directory scaffold only; input files are ignored.
 
-The repository includes only the `jh_001` example under `raw/` and `outputs/`, with the expected subfolder names below it. These directories are empty in a fresh clone. Raw input files and generated output files are ignored. Place input data in the appropriate `raw/jh_001/` subfolder; `outputs/jh_001/` is for analysis products.
+The repository includes the `jh_001` and `jh_010` examples under `raw/` and `outputs/`, with their expected subfolder names below. Input files and generated output files are ignored. Place input data in the appropriate `raw/<experiment>/` subfolder; `outputs/<experiment>/` is for analysis products.
 
 ```text
 titeseq_data/
 ├── raw/
-│   └── jh_001/
+│   ├── jh_001/
+│   │   ├── cell_ct_out/
+│   │   ├── cell_ct_raw/
+│   │   ├── demultiplex/
+│   │   │   └── jh_001_metadata.txt
+│   │   ├── demux_in/
+│   │   │   └── jh_001_bc_sample_trace.txt
+│   │   ├── fluor_raw/
+│   │   ├── raw_fastq/
+│   │   └── references/
+│   └── jh_010/
 │       ├── cell_ct_out/
 │       ├── cell_ct_raw/
 │       ├── demultiplex/
-│       │   └── jh_001_metadata.txt
 │       ├── demux_in/
-│       │   └── jh_001_bc_sample_trace.txt
 │       ├── fluor_raw/
 │       ├── raw_fastq/
 │       └── references/
 └── outputs/
-    └── jh_001/
+    ├── jh_001/
+    │   ├── alignments/
+    │   ├── fastp_output/
+    │   ├── fastqc_output/
+    │   ├── library_dfs/
+    │   ├── library_plots/
+    │   ├── merged_reads/
+    │   ├── merged_variants_filtered_reads/
+    │   ├── mutation_dfs/
+    │   ├── normalized_tite_seq_counts/
+    │   ├── normalized_tite_seq_scores/
+    │   ├── raw_tite_seq_counts/
+    │   ├── seqkit_stats/
+    │   ├── tite_seq_Kds/
+    │   ├── ts_library_0.64nM_sens120/
+    │   ├── ts_library_3.2nM_sens120/
+    │   ├── ts_library_16nM_sens120/
+    │   ├── ts_library_80nM_sens120/
+    │   ├── ts_library_400nM_sens120/
+    │   └── ts_library_2000nM_sens120/
+    └── jh_010/
         ├── alignments/
         ├── fastp_output/
         ├── fastqc_output/
         ├── library_dfs/
-        ├── library_plots/
         ├── merged_reads/
         ├── merged_variants_filtered_reads/
-        ├── mutation_dfs/
-        ├── normalized_tite_seq_counts/
-        ├── normalized_tite_seq_scores/
-        ├── raw_tite_seq_counts/
+        ├── mutation_dfs_whitelist/
+        ├── normalized_tite_seq_counts_whitelist/
+        ├── normalized_tite_seq_scores_whitelist/
+        ├── pooled_reads/
+        ├── raw_tite_seq_counts_whitelist/
         ├── seqkit_stats/
+        ├── seqthresh/
         ├── tite_seq_Kds/
-        ├── ts_library_0.64nM_sens120/
-        ├── ts_library_3.2nM_sens120/
-        ├── ts_library_16nM_sens120/
-        ├── ts_library_80nM_sens120/
-        ├── ts_library_400nM_sens120/
-        └── ts_library_2000nM_sens120/
+        ├── tite_seq_Kds_leftaugment/
+        ├── ts_1conc_map/
+        ├── ts_1conc_map_leftaugment/
+        ├── ts_library_0.64nM_sensNone/
+        ├── ts_library_3.2nM_sensNone/
+        ├── ts_library_16nM_sensNone/
+        ├── ts_library_80nM_sensNone/
+        ├── ts_library_400nM_sensNone/
+        └── ts_library_2000nM_sensNone/
 ```
 
-Git tracks only these two example input text files, the ignore rules, and empty `.gitkeep` placeholders needed to preserve the remaining directories. FASTQ data and all generated output data are ignored.
+The diagrams show only folders one level below each experiment directory; deeper folders are omitted. Compared with `jh_001`, `jh_010` adds folders for pooled reads and sequence thresholding, whitelist-based mutation/count/score outputs, and left-augmented Kd fitting and single-concentration maps.
 
-Note that the subfolders in the 'outputs/' directory are created by the scripts and will not exist until the scripts are run. The subfolders in the 'raw/' directory must be created manually and populated with the appropriate input data before running the scripts.
+Git tracks only the two `jh_001` example input text files, ignore rules, and empty `.gitkeep` placeholders needed to preserve the `jh_001` and `jh_010` directory scaffolds. FASTQ data and all generated output data are not included within the publically available repository.
+
+The output directories are preserved as empty placeholders until scripts populate them. The raw subfolders must be populated with the appropriate input data before running the scripts.
 
 ## Input Data Types and Structuring
 
@@ -80,6 +115,8 @@ Before proceeding, ensure that the appropriate reference FASTA files are present
 Once the metadata file is generated using 01a_metadatafill.py, the desired FASTA files are in the reference directory, and the appropriately named FASTQ files are in the demultiplex directory, you may run script 04_filter_ngmerge_reads.sh. This bash script will analyze, filter the reads by quality score, and merge the paired-end reads. The merged reads will then be compared to the reference fasta sequences to identify mutations. This output (.bam) will be stored in the "alignments/" directory.
 
 (updated 09 OCT 2026) The script 04_filter_ngmerge_reads.sh has been updated to pool reads from within a single concentration to create rank abundance files. These rank abundance files are then unpacked to determine the "knee" of both the raw abundance vs rank and the cumulative sequencing coverage using script 04b_pooled_seqthresh.py. The output of this script is a list of DNA sequences which are observed above this knee threshold and present in all concentrations for both replicates. See the script documentation at the top of the script to learn more about the different cutoff options available for filtering.
+
+(updated 22 OCT 2026) The script 04a_pool_rank_abundance.sh was created in case of errors running the post loop pooling segment of script 04_, as the post loop segment calls on parts of the metadata previously not called within the loop (bin number, replicate, etc.). The script takes in the same arguments as script 04_, then just executes the part of script 04_ associated with pooling (after iterating through each fastq.gz). This enables running the pooling functions separately in case of an error after the iterative loop the fastq files finishes. If script 04_ completes with no error than 04a_ is not required to run.
 
 Once the .bam files have been generated, the next script to run is 05_mutation_analysis.py. This script will analyze the .bam data to identify variants and how frequently they appear, storing the variants in each bin as a mutation dataframe (1 mutation csv per bin). The mutation dataframe will be saved in the "mutation_dfs/" directory. The filtering for the .bam can be adjusted (i.e. read threshold, percentile of total reads) using the modified script 05b_mutation_analysis_diag.py. This modified script outputs both the desired filtered .csv and a report (.png of graphs) describing where different filtering cutoffs would exist based on read count distribution. See the description at the top of the script for more information.
 
